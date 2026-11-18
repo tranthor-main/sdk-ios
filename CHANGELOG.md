@@ -4,6 +4,12 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.2.1] - 2026-11-18
+
+### Changed
+
+- The SDK is now covered by the Tranthor SDK License instead of the MIT License. You may include it in your apps to connect them to Tranthor; you may not redistribute it on its own or use it with other services. Versions 0.1.0 and 0.2.0 stay under the MIT License.
+
 ## [0.2.0] - 2026-11-18
 
 ### Changed

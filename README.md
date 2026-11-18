@@ -13,7 +13,7 @@ Send events from an iOS app to [Tranthor](https://tranthor.com): identify custom
 Add the package with Swift Package Manager:
 
 ```swift
-.package(url: "https://github.com/tranthor-main/sdk-ios.git", from: "0.2.0")
+.package(url: "https://github.com/tranthor-main/sdk-ios.git", from: "0.2.1")
 ```
 
 or add the URL in Xcode under Package Dependencies. Then add the products you use to your target:
@@ -106,4 +106,4 @@ When the app goes to the background, queued events are sent in a background task
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+Use of the SDK is covered by the [Tranthor SDK License](LICENSE): you may include it in your apps to connect them to Tranthor, and may not redistribute it on its own or use it with other services.

@@ -1,21 +1,57 @@
-MIT License
+Tranthor SDK License
 
-Copyright (c) 2026 Tranthor
+Copyright (c) 2026 Tranthor. All rights reserved.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+This license covers the software in this repository (the "Software"), starting
+with version 0.2.1. Versions 0.1.0 and 0.2.0 were released under the MIT License
+and remain available under it.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+1. What you may do
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+   You may use the Software, copy it, and include it in your own applications,
+   in source or compiled form, and distribute it as part of those applications,
+   for one purpose only: connecting those applications to Tranthor's services.
+
+   You may modify the Software as far as that purpose requires. Your
+   modifications are covered by this license.
+
+2. What you may not do
+
+   a. Distribute the Software, or a modified version of it, on its own or as
+      part of another SDK, library, framework or developer tool.
+   b. Use the Software, or any part of it or work derived from it, to send data
+      to, or to build or operate, a product or service other than Tranthor's.
+   c. Remove or alter the copyright and license notices.
+   d. Grant others more rights in the Software than this license gives you.
+
+3. Ownership
+
+   Tranthor keeps all rights in the Software that this license does not
+   expressly grant. This license gives you no right to use Tranthor's names,
+   logos or trademarks.
+
+4. Contributions
+
+   If you send Tranthor a change to the Software, you grant Tranthor a
+   perpetual, worldwide, royalty-free right to use, modify and distribute it
+   under any terms.
+
+5. Termination
+
+   Your rights under this license end automatically if you break its terms.
+   When they end, you must stop using and distributing the Software.
+
+6. No warranty
+
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+
+7. Limit of liability
+
+   TO THE EXTENT THE LAW ALLOWS, TRANTHOR IS NOT LIABLE FOR ANY CLAIM, DAMAGES
+   OR OTHER LIABILITY, WHETHER IN CONTRACT, TORT OR OTHERWISE, ARISING FROM THE
+   SOFTWARE OR ITS USE. YOUR AGREEMENT WITH TRANTHOR FOR ITS SERVICES, IF YOU
+   HAVE ONE, GOVERNS THOSE SERVICES.
+
+Questions about this license: support@tranthor.com
