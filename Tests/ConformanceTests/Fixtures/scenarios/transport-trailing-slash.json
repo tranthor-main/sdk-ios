@@ -1,0 +1,49 @@
+{
+  "id": "transport-trailing-slash",
+  "description": "A base URL with trailing slashes still targets one canonical ingestion path.",
+  "capabilities": [
+    "core",
+    "transport"
+  ],
+  "config": {
+    "writeKey": "Basic MDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAwOmNvbmZvcm1hbmNl",
+    "flushIntervalMs": 1000,
+    "baseDelay": 80,
+    "retries": 3,
+    "hostSuffix": "///"
+  },
+  "server": {
+    "responses": []
+  },
+  "steps": [
+    {
+      "op": "emit",
+      "call": "a",
+      "method": "track",
+      "data": {
+        "userId": "user-1",
+        "event": "event-a"
+      }
+    },
+    {
+      "op": "flush",
+      "rejected": false
+    },
+    {
+      "op": "assert",
+      "expect": {
+        "requests": [
+          {
+            "batch": [
+              {
+                "call": "a"
+              }
+            ],
+            "path": "/api/public/apps/batch"
+          }
+        ],
+        "errors": []
+      }
+    }
+  ]
+}

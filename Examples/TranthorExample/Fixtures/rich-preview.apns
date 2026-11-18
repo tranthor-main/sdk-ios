@@ -1,0 +1,16 @@
+{
+  "aps": {
+    "alert": {
+      "title": "Tranthor image notification",
+      "body": "Replace the image URL and configure its HTTPS CDN host in the service extension."
+    },
+    "sound": "default",
+    "mutable-content": 1,
+    "category": "TRANTHOR_PUSH"
+  },
+  "tranthor": {
+    "version": 1,
+    "deliveryId": "simulator-rich-preview-1",
+    "imageUrl": "https://images.your-cdn.example/preview.png"
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "id": "empty-flush",
+  "description": "Flushing an empty queue succeeds without a request.",
+  "capabilities": [
+    "core"
+  ],
+  "config": {
+    "writeKey": "Basic MDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAwOmNvbmZvcm1hbmNl"
+  },
+  "server": {
+    "responses": []
+  },
+  "steps": [
+    {
+      "op": "flush",
+      "rejected": false
+    },
+    {
+      "op": "assert",
+      "expect": {
+        "requests": [],
+        "errors": []
+      }
+    }
+  ]
+}

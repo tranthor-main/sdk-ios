@@ -1,0 +1,53 @@
+{
+  "id": "transport-contract",
+  "description": "Transport sends POST to the ingestion path with JSON content type and the exact configured Authorization value.",
+  "capabilities": [
+    "core",
+    "transport"
+  ],
+  "config": {
+    "writeKey": "Basic MDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAwOmNvbmZvcm1hbmNl",
+    "flushIntervalMs": 1000,
+    "baseDelay": 80,
+    "retries": 3
+  },
+  "server": {
+    "responses": []
+  },
+  "steps": [
+    {
+      "op": "emit",
+      "call": "a",
+      "method": "track",
+      "data": {
+        "userId": "user-1",
+        "event": "event-a"
+      }
+    },
+    {
+      "op": "flush",
+      "rejected": false
+    },
+    {
+      "op": "assert",
+      "expect": {
+        "requests": [
+          {
+            "batch": [
+              {
+                "call": "a"
+              }
+            ],
+            "method": "POST",
+            "path": "/api/public/apps/batch",
+            "headers": {
+              "authorization": "Basic MDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAwOmNvbmZvcm1hbmNl",
+              "content-type": "application/json"
+            }
+          }
+        ],
+        "errors": []
+      }
+    }
+  ]
+}

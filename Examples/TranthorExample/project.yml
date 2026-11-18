@@ -1,0 +1,115 @@
+name: TranthorExample
+options:
+  minimumXcodeGenVersion: 2.46.0
+  deploymentTarget:
+    iOS: '15.0'
+packages:
+  TranthorSDK:
+    path: ../..
+configFiles:
+  Debug: ../../Config/Local.xcconfig
+  Release: ../../Config/Local.xcconfig
+settings:
+  base:
+    SWIFT_VERSION: '6.0'
+    SWIFT_STRICT_CONCURRENCY: complete
+    CODE_SIGN_STYLE: Automatic
+    TARGETED_DEVICE_FAMILY: '1,2'
+    GENERATE_INFOPLIST_FILE: YES
+    MARKETING_VERSION: '1.0'
+    CURRENT_PROJECT_VERSION: '1'
+targets:
+  TranthorExample:
+    type: application
+    platform: iOS
+    settings:
+      base:
+        CODE_SIGN_ENTITLEMENTS: $(TRANTHOR_PUSH_ENTITLEMENTS)
+    sources:
+      - Sources
+      - path: Fixtures/preview-image.png
+        buildPhase: resources
+    dependencies:
+      - package: TranthorSDK
+        product: TranthorSDK
+      - package: TranthorSDK
+        product: TranthorPush
+      - package: TranthorSDK
+        product: TranthorPushService
+      - target: TranthorNotificationService
+        embed: true
+    info:
+      path: Info.plist
+      properties:
+        CFBundleDisplayName: Tranthor Example
+        TranthorAPNsEnvironment: $(TRANTHOR_APNS_ENVIRONMENT)
+        UILaunchScreen: {}
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        NSLocalNetworkUsageDescription: Connect to a local Tranthor test server on your network during SDK testing.
+  TranthorNotificationService:
+    type: app-extension
+    platform: iOS
+    sources: [NotificationService]
+    dependencies:
+      - package: TranthorSDK
+        product: TranthorPushService
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(inherited).NotificationService
+        APPLICATION_EXTENSION_API_ONLY: YES
+        SKIP_INSTALL: YES
+    info:
+      path: NotificationService/Info.plist
+      properties:
+        CFBundleDisplayName: Tranthor Images
+        TranthorAllowedImageHosts: []
+        TranthorAppGroup: ''
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.usernotifications.service
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).NotificationService
+  TranthorExampleUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [UITests]
+    info:
+      path: UITests/Info.plist
+      properties:
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+    dependencies:
+      - target: TranthorExample
+    settings:
+      base:
+        IPHONEOS_DEPLOYMENT_TARGET: '17.0'
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.tranthor.ios-example.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        CODE_SIGNING_ALLOWED: NO
+  ExampleModelTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [../../Tests/ExampleModelTests]
+    dependencies:
+      - target: TranthorExample
+      - package: TranthorSDK
+        product: TranthorSDK
+      - package: TranthorSDK
+        product: TranthorPush
+    settings:
+      base:
+        IPHONEOS_DEPLOYMENT_TARGET: '17.0'
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.tranthor.ios-example.modeltests
+        GENERATE_INFOPLIST_FILE: YES
+        CODE_SIGNING_ALLOWED: NO
+schemes:
+  TranthorExample:
+    build:
+      targets:
+        TranthorExample: all
+        TranthorExampleUITests: [test]
+        ExampleModelTests: [test]
+    test:
+      targets: [TranthorExampleUITests, ExampleModelTests]
+      gatherCoverageData: false

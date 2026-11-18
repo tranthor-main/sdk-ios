@@ -1,0 +1,48 @@
+{
+  "id": "known-identify",
+  "description": "Identify with a userId preserves traits and generates its event stamp.",
+  "capabilities": [
+    "core"
+  ],
+  "config": {
+    "writeKey": "Basic MDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAwOmNvbmZvcm1hbmNl",
+    "flushIntervalMs": 1000,
+    "baseDelay": 80,
+    "retries": 3
+  },
+  "server": {
+    "responses": []
+  },
+  "steps": [
+    {
+      "op": "emit",
+      "call": "a",
+      "method": "identify",
+      "data": {
+        "userId": "user-1",
+        "traits": {
+          "email": "test@example.test"
+        }
+      }
+    },
+    {
+      "op": "flush",
+      "rejected": false
+    },
+    {
+      "op": "assert",
+      "expect": {
+        "requests": [
+          {
+            "batch": [
+              {
+                "call": "a"
+              }
+            ]
+          }
+        ],
+        "errors": []
+      }
+    }
+  ]
+}

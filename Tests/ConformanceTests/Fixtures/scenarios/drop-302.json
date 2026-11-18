@@ -1,0 +1,60 @@
+{
+  "id": "drop-302",
+  "description": "Redirects are terminal HTTP failures and are never followed.",
+  "capabilities": [
+    "core",
+    "transport"
+  ],
+  "config": {
+    "writeKey": "Basic MDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAwOmNvbmZvcm1hbmNl",
+    "batchSize": 1,
+    "baseDelay": 60,
+    "retries": 3
+  },
+  "server": {
+    "responses": [
+      {
+        "status": 302,
+        "location": "/redirect-target"
+      }
+    ]
+  },
+  "steps": [
+    {
+      "op": "emit",
+      "call": "a",
+      "method": "track",
+      "data": {
+        "userId": "user-1",
+        "event": "event-a"
+      }
+    },
+    {
+      "op": "flush",
+      "rejected": true
+    },
+    {
+      "op": "assert",
+      "expect": {
+        "requests": [
+          {
+            "batch": [
+              {
+                "call": "a"
+              }
+            ]
+          }
+        ],
+        "errors": [
+          {
+            "attempts": 1,
+            "eventCalls": [
+              "a"
+            ],
+            "status": 302
+          }
+        ]
+      }
+    }
+  ]
+}

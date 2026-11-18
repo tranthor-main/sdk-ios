@@ -1,0 +1,68 @@
+{
+  "id": "retry-then-nonretryable",
+  "description": "A non-retryable response ends retrying after two requests for the batch.",
+  "capabilities": [
+    "core"
+  ],
+  "config": {
+    "writeKey": "Basic MDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAwOmNvbmZvcm1hbmNl",
+    "batchSize": 1,
+    "baseDelay": 60,
+    "retries": 3
+  },
+  "server": {
+    "responses": [
+      {
+        "status": 500
+      },
+      {
+        "status": 400
+      }
+    ]
+  },
+  "steps": [
+    {
+      "op": "emit",
+      "call": "a",
+      "method": "track",
+      "data": {
+        "userId": "user-1",
+        "event": "event-a"
+      }
+    },
+    {
+      "op": "flush",
+      "rejected": true
+    },
+    {
+      "op": "assert",
+      "expect": {
+        "requests": [
+          {
+            "batch": [
+              {
+                "call": "a"
+              }
+            ]
+          },
+          {
+            "batch": [
+              {
+                "call": "a"
+              }
+            ]
+          }
+        ],
+        "errors": [
+          {
+            "attempts": 2,
+            "eventCalls": [
+              "a"
+            ],
+            "status": 400
+          }
+        ]
+      }
+    }
+  ]
+}

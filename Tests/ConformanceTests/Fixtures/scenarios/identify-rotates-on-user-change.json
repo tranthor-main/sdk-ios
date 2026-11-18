@@ -1,0 +1,143 @@
+{
+  "id": "identify-rotates-on-user-change",
+  "description": "Identify with a userId different from the stored one rotates to a fresh anonymousId before sending; the rotated anonymousId and the userId persist across restart.",
+  "capabilities": [
+    "core",
+    "persistence",
+    "identity-link"
+  ],
+  "config": {
+    "writeKey": "Basic MDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAwOmNvbmZvcm1hbmNl",
+    "flushIntervalMs": 1000,
+    "baseDelay": 80,
+    "retries": 3
+  },
+  "server": {
+    "responses": []
+  },
+  "steps": [
+    {
+      "op": "anonymousId",
+      "ref": "visitor"
+    },
+    {
+      "op": "emit",
+      "call": "a",
+      "method": "identify",
+      "data": {
+        "userId": "user-1"
+      }
+    },
+    {
+      "op": "emit",
+      "call": "b",
+      "method": "identify",
+      "data": {
+        "userId": "user-2"
+      }
+    },
+    {
+      "op": "anonymousId",
+      "ref": "second"
+    },
+    {
+      "op": "flush",
+      "rejected": false
+    },
+    {
+      "op": "assert",
+      "expect": {
+        "requests": [
+          {
+            "batch": [
+              {
+                "call": "a",
+                "anonymousIdRef": "visitor"
+              },
+              {
+                "call": "b",
+                "anonymousIdRef": "second"
+              }
+            ]
+          }
+        ],
+        "errors": []
+      }
+    },
+    {
+      "op": "restart",
+      "label": "restart"
+    },
+    {
+      "op": "anonymousId",
+      "ref": "second"
+    },
+    {
+      "op": "emit",
+      "call": "c",
+      "method": "identify",
+      "data": {
+        "userId": "user-1"
+      }
+    },
+    {
+      "op": "anonymousId",
+      "ref": "third"
+    },
+    {
+      "op": "emit",
+      "call": "d",
+      "method": "identify",
+      "data": {
+        "userId": "user-1"
+      }
+    },
+    {
+      "op": "anonymousId",
+      "ref": "third"
+    },
+    {
+      "op": "flush",
+      "rejected": false
+    },
+    {
+      "op": "assert",
+      "expect": {
+        "requests": [
+          {
+            "batch": [
+              {
+                "call": "a",
+                "anonymousIdRef": "visitor"
+              },
+              {
+                "call": "b",
+                "anonymousIdRef": "second"
+              }
+            ]
+          },
+          {
+            "batch": [
+              {
+                "call": "c",
+                "anonymousIdRef": "third"
+              },
+              {
+                "call": "d",
+                "anonymousIdRef": "third"
+              }
+            ]
+          }
+        ],
+        "errors": [],
+        "restartBetween": [
+          {
+            "label": "restart",
+            "from": 0,
+            "to": 1
+          }
+        ]
+      }
+    }
+  ]
+}

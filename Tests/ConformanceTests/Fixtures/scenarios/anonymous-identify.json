@@ -1,0 +1,48 @@
+{
+  "id": "anonymous-identify",
+  "description": "Anonymous identify carries anonymousId and traits without inventing a userId.",
+  "capabilities": [
+    "core"
+  ],
+  "config": {
+    "writeKey": "Basic MDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAwOmNvbmZvcm1hbmNl",
+    "flushIntervalMs": 1000,
+    "baseDelay": 80,
+    "retries": 3
+  },
+  "server": {
+    "responses": []
+  },
+  "steps": [
+    {
+      "op": "emit",
+      "call": "a",
+      "method": "identify",
+      "data": {
+        "anonymousId": "anon-1",
+        "traits": {
+          "plan": "trial"
+        }
+      }
+    },
+    {
+      "op": "flush",
+      "rejected": false
+    },
+    {
+      "op": "assert",
+      "expect": {
+        "requests": [
+          {
+            "batch": [
+              {
+                "call": "a"
+              }
+            ]
+          }
+        ],
+        "errors": []
+      }
+    }
+  ]
+}

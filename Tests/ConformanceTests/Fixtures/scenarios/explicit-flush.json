@@ -1,0 +1,66 @@
+{
+  "id": "explicit-flush",
+  "description": "Explicit flush sends a partial batch immediately and resolves.",
+  "capabilities": [
+    "core"
+  ],
+  "config": {
+    "writeKey": "Basic MDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAwOmNvbmZvcm1hbmNl",
+    "flushIntervalMs": 1000,
+    "baseDelay": 80,
+    "retries": 3
+  },
+  "server": {
+    "responses": []
+  },
+  "steps": [
+    {
+      "op": "emit",
+      "call": "a",
+      "method": "track",
+      "data": {
+        "userId": "user-1",
+        "event": "event-a"
+      }
+    },
+    {
+      "op": "emit",
+      "call": "b",
+      "method": "track",
+      "data": {
+        "userId": "user-1",
+        "event": "event-b"
+      }
+    },
+    {
+      "op": "flush",
+      "rejected": false
+    },
+    {
+      "op": "assert",
+      "expect": {
+        "requests": [
+          {
+            "batch": [
+              {
+                "call": "a"
+              },
+              {
+                "call": "b"
+              }
+            ]
+          }
+        ],
+        "errors": [],
+        "delays": [
+          {
+            "from": "a",
+            "to": 0,
+            "minMs": 0,
+            "maxMs": 800
+          }
+        ]
+      }
+    }
+  ]
+}

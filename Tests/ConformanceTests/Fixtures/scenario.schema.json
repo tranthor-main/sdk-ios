@@ -1,0 +1,551 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://tranthor.com/conformance/scenario.schema.json",
+  "title": "Tranthor SDK conformance scenario v1",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1
+    },
+    "capabilities": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "core",
+          "transport",
+          "persistence",
+          "lifecycle",
+          "consent",
+          "identity-link"
+        ]
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "config": {
+      "$ref": "#/definitions/config"
+    },
+    "server": {
+      "type": "object",
+      "properties": {
+        "responses": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/response"
+          }
+        }
+      },
+      "required": [
+        "responses"
+      ],
+      "additionalProperties": false
+    },
+    "steps": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/step"
+      },
+      "minItems": 2,
+      "contains": {
+        "type": "object",
+        "required": [
+          "op"
+        ],
+        "properties": {
+          "op": {
+            "const": "assert"
+          }
+        }
+      }
+    }
+  },
+  "required": [
+    "id",
+    "description",
+    "capabilities",
+    "config",
+    "server",
+    "steps"
+  ],
+  "additionalProperties": false,
+  "definitions": {
+    "data": {
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "anonymousId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "messageId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "timestamp": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$(?![\\s\\S])"
+        },
+        "event": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "traits": {
+          "type": "object"
+        },
+        "properties": {
+          "type": "object"
+        },
+        "context": {
+          "type": "object"
+        },
+        "files": {
+          "type": "array"
+        }
+      },
+      "required": [],
+      "additionalProperties": false,
+      "anyOf": [
+        {
+          "required": [
+            "userId"
+          ]
+        },
+        {
+          "required": [
+            "anonymousId"
+          ]
+        }
+      ]
+    },
+    "response": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "integer",
+          "minimum": 200,
+          "maximum": 599
+        },
+        "delayMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 30000
+        },
+        "retryAfter": {
+          "type": "string",
+          "pattern": "^[0-9]+$(?![\\s\\S])",
+          "allOf": [
+            {
+              "pattern": "^[\\x20-\\x7e]*$"
+            }
+          ]
+        },
+        "drop": {
+          "type": "boolean"
+        },
+        "location": {
+          "type": "string",
+          "pattern": "^[\\x20-\\x7e]*$(?![\\s\\S])"
+        }
+      },
+      "required": [],
+      "additionalProperties": false,
+      "anyOf": [
+        {
+          "required": [
+            "status"
+          ]
+        },
+        {
+          "required": [
+            "drop"
+          ],
+          "properties": {
+            "drop": {
+              "const": true
+            }
+          }
+        }
+      ]
+    },
+    "item": {
+      "type": "object",
+      "properties": {
+        "call": {
+          "type": "string",
+          "minLength": 1
+        },
+        "fields": {
+          "type": "object"
+        },
+        "anonymousIdRef": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+        }
+      },
+      "required": [
+        "call"
+      ],
+      "additionalProperties": false
+    },
+    "request": {
+      "type": "object",
+      "properties": {
+        "batch": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/item"
+          }
+        },
+        "method": {
+          "const": "POST"
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "headers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^[\\x20-\\x7e]*$(?![\\s\\S])"
+          }
+        },
+        "context": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "batch"
+      ],
+      "additionalProperties": false
+    },
+    "error": {
+      "type": "object",
+      "properties": {
+        "attempts": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "eventCalls": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1
+        },
+        "status": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 100,
+          "maximum": 599
+        }
+      },
+      "required": [
+        "attempts",
+        "eventCalls"
+      ],
+      "additionalProperties": false
+    },
+    "delay": {
+      "type": "object",
+      "properties": {
+        "from": {
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "string",
+              "minLength": 1
+            }
+          ]
+        },
+        "to": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "minMs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "maxMs": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "from",
+        "to",
+        "minMs",
+        "maxMs"
+      ],
+      "additionalProperties": false
+    },
+    "expect": {
+      "type": "object",
+      "properties": {
+        "requests": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/request"
+          }
+        },
+        "errors": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/error"
+          }
+        },
+        "delays": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/delay"
+          }
+        },
+        "restartBetween": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "label": {
+                "type": "string",
+                "minLength": 1
+              },
+              "from": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "to": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "label"
+            ],
+            "additionalProperties": false,
+            "anyOf": [
+              {
+                "required": [
+                  "from"
+                ]
+              },
+              {
+                "required": [
+                  "to"
+                ]
+              }
+            ]
+          }
+        }
+      },
+      "required": [
+        "requests",
+        "errors"
+      ],
+      "additionalProperties": false
+    },
+    "step": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "const": "emit"
+            },
+            "call": {
+              "type": "string",
+              "minLength": 1
+            },
+            "method": {
+              "enum": [
+                "identify",
+                "track",
+                "page",
+                "screen"
+              ]
+            },
+            "data": {
+              "$ref": "#/definitions/data"
+            }
+          },
+          "required": [
+            "op",
+            "call",
+            "method",
+            "data"
+          ],
+          "additionalProperties": false,
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "method": {
+                    "const": "track"
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "data": {
+                    "type": "object",
+                    "required": [
+                      "event"
+                    ]
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "const": "wait"
+            },
+            "ms": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "op",
+            "ms"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "const": "flush"
+            },
+            "rejected": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "const": "assert"
+            },
+            "expect": {
+              "$ref": "#/definitions/expect"
+            },
+            "timeoutMs": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10000
+            },
+            "observeMs": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 30000
+            }
+          },
+          "required": [
+            "op",
+            "expect"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "enum": [
+                "restart",
+                "background",
+                "optOut",
+                "optIn"
+              ]
+            },
+            "label": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "const": "anonymousId"
+            },
+            "ref": {
+              "type": "string",
+              "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+            }
+          },
+          "required": [
+            "op",
+            "ref"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "config": {
+      "type": "object",
+      "properties": {
+        "writeKey": {
+          "type": "string",
+          "minLength": 1
+        },
+        "batchSize": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "flushIntervalMs": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "baseDelay": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "retries": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "hostSuffix": {
+          "type": "string",
+          "pattern": "^/*$"
+        }
+      },
+      "required": [
+        "writeKey"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "aps": {
+    "alert": {"title": "Order shipped", "subtitle": "Order 42", "body": "On its way"},
+    "sound": "default",
+    "mutable-content": 1,
+    "interruption-level": "time-sensitive",
+    "category": "TRANTHOR_PUSH"
+  },
+  "tranthor": {"version": 1, "deliveryId": "8c0fAbC_123-xyz", "imageUrl": "https://images.example.test/a.png", "badge": "increment"},
+  "url": "myapp://orders/42",
+  "orderId": "42",
+  "campaign": "spring"
+}

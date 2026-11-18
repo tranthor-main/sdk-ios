@@ -1,0 +1,77 @@
+{
+  "id": "retry-dropped-connection-exhausted",
+  "description": "Two socket drops exhaust one SDK retry and report exactly two attempts.",
+  "capabilities": [
+    "core",
+    "transport"
+  ],
+  "config": {
+    "writeKey": "Basic MDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAwOmNvbmZvcm1hbmNl",
+    "batchSize": 1,
+    "baseDelay": 80,
+    "retries": 1
+  },
+  "server": {
+    "responses": [
+      {
+        "drop": true
+      },
+      {
+        "drop": true
+      }
+    ]
+  },
+  "steps": [
+    {
+      "op": "emit",
+      "call": "a",
+      "method": "track",
+      "data": {
+        "userId": "user-1",
+        "event": "event-a"
+      }
+    },
+    {
+      "op": "flush",
+      "rejected": true
+    },
+    {
+      "op": "assert",
+      "expect": {
+        "requests": [
+          {
+            "batch": [
+              {
+                "call": "a"
+              }
+            ]
+          },
+          {
+            "batch": [
+              {
+                "call": "a"
+              }
+            ]
+          }
+        ],
+        "errors": [
+          {
+            "attempts": 2,
+            "eventCalls": [
+              "a"
+            ],
+            "status": null
+          }
+        ],
+        "delays": [
+          {
+            "from": 0,
+            "to": 1,
+            "minMs": 65,
+            "maxMs": 600
+          }
+        ]
+      }
+    }
+  ]
+}

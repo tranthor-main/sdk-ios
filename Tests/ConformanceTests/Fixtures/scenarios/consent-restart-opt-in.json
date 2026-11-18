@@ -1,0 +1,85 @@
+{
+  "id": "consent-restart-opt-in",
+  "description": "Opt-out persists across restart until opt-in resumes collection.",
+  "capabilities": [
+    "core",
+    "consent",
+    "persistence"
+  ],
+  "config": {
+    "writeKey": "Basic MDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAwOmNvbmZvcm1hbmNl",
+    "flushIntervalMs": 120
+  },
+  "server": {
+    "responses": []
+  },
+  "steps": [
+    {
+      "op": "emit",
+      "call": "a",
+      "method": "track",
+      "data": {
+        "userId": "user-1",
+        "event": "event-a"
+      }
+    },
+    {
+      "op": "optOut"
+    },
+    {
+      "op": "restart"
+    },
+    {
+      "op": "emit",
+      "call": "b",
+      "method": "track",
+      "data": {
+        "userId": "user-1",
+        "event": "event-b"
+      }
+    },
+    {
+      "op": "flush",
+      "rejected": false
+    },
+    {
+      "op": "assert",
+      "observeMs": 300,
+      "expect": {
+        "requests": [],
+        "errors": []
+      }
+    },
+    {
+      "op": "optIn"
+    },
+    {
+      "op": "emit",
+      "call": "c",
+      "method": "track",
+      "data": {
+        "userId": "user-1",
+        "event": "event-c"
+      }
+    },
+    {
+      "op": "flush",
+      "rejected": false
+    },
+    {
+      "op": "assert",
+      "expect": {
+        "requests": [
+          {
+            "batch": [
+              {
+                "call": "c"
+              }
+            ]
+          }
+        ],
+        "errors": []
+      }
+    }
+  ]
+}

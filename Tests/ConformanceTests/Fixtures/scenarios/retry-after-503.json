@@ -1,0 +1,70 @@
+{
+  "id": "retry-after-503",
+  "description": "Retry-After on 503 raises a shorter backoff just as it does on 429.",
+  "capabilities": [
+    "core",
+    "transport"
+  ],
+  "config": {
+    "writeKey": "Basic MDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAwOmNvbmZvcm1hbmNl",
+    "flushIntervalMs": 1000,
+    "baseDelay": 80,
+    "retries": 3
+  },
+  "server": {
+    "responses": [
+      {
+        "status": 503,
+        "retryAfter": "1"
+      },
+      {
+        "status": 204
+      }
+    ]
+  },
+  "steps": [
+    {
+      "op": "emit",
+      "call": "a",
+      "method": "track",
+      "data": {
+        "userId": "user-1",
+        "event": "event-a"
+      }
+    },
+    {
+      "op": "flush",
+      "rejected": false
+    },
+    {
+      "op": "assert",
+      "expect": {
+        "requests": [
+          {
+            "batch": [
+              {
+                "call": "a"
+              }
+            ]
+          },
+          {
+            "batch": [
+              {
+                "call": "a"
+              }
+            ]
+          }
+        ],
+        "errors": [],
+        "delays": [
+          {
+            "from": 0,
+            "to": 1,
+            "minMs": 985,
+            "maxMs": 1600
+          }
+        ]
+      }
+    }
+  ]
+}

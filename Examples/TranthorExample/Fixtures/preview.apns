@@ -1,0 +1,14 @@
+{
+  "aps": {
+    "alert": {
+      "title": "Tranthor simulator push",
+      "body": "Injected locally with simctl. Tap to test the opened event."
+    },
+    "sound": "default",
+    "category": "TRANTHOR_PUSH"
+  },
+  "tranthor": {
+    "version": 1,
+    "deliveryId": "simulator-preview-1"
+  }
+}

@@ -1,0 +1,87 @@
+{
+  "id": "explicit-anonymous-id-wins",
+  "description": "A caller-supplied anonymousId is sent verbatim on identify and is not stored; a user change still rotates the stored anonymousId.",
+  "capabilities": [
+    "core",
+    "identity-link"
+  ],
+  "config": {
+    "writeKey": "Basic MDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAwOmNvbmZvcm1hbmNl",
+    "flushIntervalMs": 1000,
+    "baseDelay": 80,
+    "retries": 3
+  },
+  "server": {
+    "responses": []
+  },
+  "steps": [
+    {
+      "op": "anonymousId",
+      "ref": "visitor"
+    },
+    {
+      "op": "emit",
+      "call": "a",
+      "method": "identify",
+      "data": {
+        "userId": "user-1",
+        "anonymousId": "caller-anon-1"
+      }
+    },
+    {
+      "op": "anonymousId",
+      "ref": "visitor"
+    },
+    {
+      "op": "emit",
+      "call": "b",
+      "method": "identify",
+      "data": {
+        "userId": "user-2",
+        "anonymousId": "caller-anon-2"
+      }
+    },
+    {
+      "op": "anonymousId",
+      "ref": "second"
+    },
+    {
+      "op": "emit",
+      "call": "c",
+      "method": "identify",
+      "data": {
+        "userId": "user-2"
+      }
+    },
+    {
+      "op": "anonymousId",
+      "ref": "second"
+    },
+    {
+      "op": "flush",
+      "rejected": false
+    },
+    {
+      "op": "assert",
+      "expect": {
+        "requests": [
+          {
+            "batch": [
+              {
+                "call": "a"
+              },
+              {
+                "call": "b"
+              },
+              {
+                "call": "c",
+                "anonymousIdRef": "second"
+              }
+            ]
+          }
+        ],
+        "errors": []
+      }
+    }
+  ]
+}

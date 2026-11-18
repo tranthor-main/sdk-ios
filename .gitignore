@@ -1,0 +1,11 @@
+.build/
+DerivedData/
+.swiftpm/
+**/*.xcodeproj/xcuserdata/
+Config/Local.xcconfig
+*.xcresult/
+.DS_Store
+Examples/TranthorExample/TranthorExample.xcodeproj/
+Config/Push.entitlements
+
+TestSupport/ConformanceHost.xcodeproj/

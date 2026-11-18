@@ -1,0 +1,85 @@
+{
+  "id": "timestamp-call-time",
+  "description": "All four event methods stamp time when called, before delayed delivery.",
+  "capabilities": [
+    "core"
+  ],
+  "config": {
+    "writeKey": "Basic MDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAwOmNvbmZvcm1hbmNl",
+    "flushIntervalMs": 1000,
+    "baseDelay": 80,
+    "retries": 3
+  },
+  "server": {
+    "responses": []
+  },
+  "steps": [
+    {
+      "op": "emit",
+      "call": "a",
+      "method": "identify",
+      "data": {
+        "userId": "user-1"
+      }
+    },
+    {
+      "op": "emit",
+      "call": "b",
+      "method": "track",
+      "data": {
+        "userId": "user-1",
+        "event": "event-b"
+      }
+    },
+    {
+      "op": "emit",
+      "call": "c",
+      "method": "page",
+      "data": {
+        "userId": "user-1",
+        "name": "Home"
+      }
+    },
+    {
+      "op": "emit",
+      "call": "d",
+      "method": "screen",
+      "data": {
+        "userId": "user-1",
+        "name": "Settings"
+      }
+    },
+    {
+      "op": "wait",
+      "ms": 150
+    },
+    {
+      "op": "flush",
+      "rejected": false
+    },
+    {
+      "op": "assert",
+      "expect": {
+        "requests": [
+          {
+            "batch": [
+              {
+                "call": "a"
+              },
+              {
+                "call": "b"
+              },
+              {
+                "call": "c"
+              },
+              {
+                "call": "d"
+              }
+            ]
+          }
+        ],
+        "errors": []
+      }
+    }
+  ]
+}

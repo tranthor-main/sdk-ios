@@ -1,0 +1,52 @@
+{
+  "id": "consent-opt-out",
+  "description": "Opt-out discards events without an error callback; flush while opted out succeeds without a request.",
+  "capabilities": [
+    "core",
+    "consent"
+  ],
+  "config": {
+    "writeKey": "Basic MDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAwOmNvbmZvcm1hbmNl",
+    "flushIntervalMs": 120,
+    "baseDelay": 80,
+    "retries": 3
+  },
+  "server": {
+    "responses": []
+  },
+  "steps": [
+    {
+      "op": "emit",
+      "call": "a",
+      "method": "track",
+      "data": {
+        "userId": "user-1",
+        "event": "event-a"
+      }
+    },
+    {
+      "op": "optOut"
+    },
+    {
+      "op": "emit",
+      "call": "b",
+      "method": "track",
+      "data": {
+        "userId": "user-1",
+        "event": "event-b"
+      }
+    },
+    {
+      "op": "flush",
+      "rejected": false
+    },
+    {
+      "op": "assert",
+      "expect": {
+        "requests": [],
+        "errors": []
+      },
+      "observeMs": 300
+    }
+  ]
+}

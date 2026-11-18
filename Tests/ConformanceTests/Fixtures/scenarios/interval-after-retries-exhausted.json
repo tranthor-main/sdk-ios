@@ -1,0 +1,97 @@
+{
+  "id": "interval-after-retries-exhausted",
+  "description": "Exhaustion retains later queued events and re-arms the interval timer.",
+  "capabilities": [
+    "core"
+  ],
+  "config": {
+    "writeKey": "Basic MDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAwOmNvbmZvcm1hbmNl",
+    "batchSize": 1,
+    "flushIntervalMs": 300,
+    "baseDelay": 60,
+    "retries": 1
+  },
+  "server": {
+    "responses": [
+      {
+        "status": 500,
+        "delayMs": 40
+      },
+      {
+        "status": 500
+      },
+      {
+        "status": 204
+      }
+    ]
+  },
+  "steps": [
+    {
+      "op": "emit",
+      "call": "a",
+      "method": "track",
+      "data": {
+        "userId": "user-1",
+        "event": "event-a"
+      }
+    },
+    {
+      "op": "emit",
+      "call": "b",
+      "method": "track",
+      "data": {
+        "userId": "user-1",
+        "event": "event-b"
+      }
+    },
+    {
+      "op": "flush",
+      "rejected": true
+    },
+    {
+      "op": "assert",
+      "expect": {
+        "requests": [
+          {
+            "batch": [
+              {
+                "call": "a"
+              }
+            ]
+          },
+          {
+            "batch": [
+              {
+                "call": "a"
+              }
+            ]
+          },
+          {
+            "batch": [
+              {
+                "call": "b"
+              }
+            ]
+          }
+        ],
+        "errors": [
+          {
+            "attempts": 2,
+            "eventCalls": [
+              "a"
+            ],
+            "status": 500
+          }
+        ],
+        "delays": [
+          {
+            "from": 1,
+            "to": 2,
+            "minMs": 280,
+            "maxMs": 1000
+          }
+        ]
+      }
+    }
+  ]
+}

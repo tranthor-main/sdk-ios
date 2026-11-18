@@ -1,0 +1,100 @@
+{
+  "id": "retry-500-doubling",
+  "description": "Three 500 responses retry with doubling backoff and identical payload stamps.",
+  "capabilities": [
+    "core"
+  ],
+  "config": {
+    "writeKey": "Basic MDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAwOmNvbmZvcm1hbmNl",
+    "flushIntervalMs": 1000,
+    "baseDelay": 300,
+    "retries": 3
+  },
+  "server": {
+    "responses": [
+      {
+        "status": 500
+      },
+      {
+        "status": 500
+      },
+      {
+        "status": 500
+      },
+      {
+        "status": 204
+      }
+    ]
+  },
+  "steps": [
+    {
+      "op": "emit",
+      "call": "a",
+      "method": "track",
+      "data": {
+        "userId": "user-1",
+        "event": "event-a"
+      }
+    },
+    {
+      "op": "flush",
+      "rejected": false
+    },
+    {
+      "op": "assert",
+      "expect": {
+        "requests": [
+          {
+            "batch": [
+              {
+                "call": "a"
+              }
+            ]
+          },
+          {
+            "batch": [
+              {
+                "call": "a"
+              }
+            ]
+          },
+          {
+            "batch": [
+              {
+                "call": "a"
+              }
+            ]
+          },
+          {
+            "batch": [
+              {
+                "call": "a"
+              }
+            ]
+          }
+        ],
+        "errors": [],
+        "delays": [
+          {
+            "from": 0,
+            "to": 1,
+            "minMs": 285,
+            "maxMs": 560
+          },
+          {
+            "from": 1,
+            "to": 2,
+            "minMs": 585,
+            "maxMs": 900
+          },
+          {
+            "from": 2,
+            "to": 3,
+            "minMs": 1185,
+            "maxMs": 1600
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,65 @@
+{
+  "id": "interval-flush",
+  "description": "A partial batch flushes at the default 500 ms interval from the first event; later calls do not reset the timer.",
+  "capabilities": [
+    "core"
+  ],
+  "config": {
+    "writeKey": "Basic MDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAwOmNvbmZvcm1hbmNl",
+    "baseDelay": 80,
+    "retries": 3
+  },
+  "server": {
+    "responses": []
+  },
+  "steps": [
+    {
+      "op": "emit",
+      "call": "a",
+      "method": "track",
+      "data": {
+        "userId": "user-1",
+        "event": "event-a"
+      }
+    },
+    {
+      "op": "wait",
+      "ms": 350
+    },
+    {
+      "op": "emit",
+      "call": "b",
+      "method": "track",
+      "data": {
+        "userId": "user-1",
+        "event": "event-b"
+      }
+    },
+    {
+      "op": "assert",
+      "expect": {
+        "requests": [
+          {
+            "batch": [
+              {
+                "call": "a"
+              },
+              {
+                "call": "b"
+              }
+            ]
+          }
+        ],
+        "errors": [],
+        "delays": [
+          {
+            "from": "a",
+            "to": 0,
+            "minMs": 480,
+            "maxMs": 750
+          }
+        ]
+      }
+    }
+  ]
+}

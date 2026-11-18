@@ -1,0 +1,62 @@
+{
+  "id": "persistence-queued-restart",
+  "description": "Queued events survive destruction and recreation of the SDK using the same durable storage.",
+  "capabilities": [
+    "core",
+    "persistence"
+  ],
+  "config": {
+    "writeKey": "Basic MDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAwOmNvbmZvcm1hbmNl",
+    "flushIntervalMs": 1000,
+    "baseDelay": 80,
+    "retries": 3
+  },
+  "server": {
+    "responses": [
+      {
+        "status": 204,
+        "delayMs": 80
+      }
+    ]
+  },
+  "steps": [
+    {
+      "op": "emit",
+      "call": "a",
+      "method": "track",
+      "data": {
+        "userId": "user-1",
+        "event": "event-a"
+      }
+    },
+    {
+      "op": "restart",
+      "label": "restart"
+    },
+    {
+      "op": "flush",
+      "rejected": false
+    },
+    {
+      "op": "assert",
+      "expect": {
+        "requests": [
+          {
+            "batch": [
+              {
+                "call": "a"
+              }
+            ]
+          }
+        ],
+        "errors": [],
+        "restartBetween": [
+          {
+            "label": "restart",
+            "to": 0
+          }
+        ]
+      }
+    }
+  ]
+}

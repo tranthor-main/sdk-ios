@@ -1,0 +1,267 @@
+{
+  "id": "later-batches-after-rejection",
+  "description": "A non-retryable failure sends batches queued behind it and later independent events.",
+  "capabilities": [
+    "core"
+  ],
+  "config": {
+    "writeKey": "Basic MDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAwOmNvbmZvcm1hbmNl",
+    "flushIntervalMs": 1000,
+    "baseDelay": 80,
+    "retries": 3
+  },
+  "server": {
+    "responses": [
+      {
+        "status": 400,
+        "delayMs": 80
+      },
+      {
+        "status": 204
+      },
+      {
+        "status": 204
+      }
+    ]
+  },
+  "steps": [
+    {
+      "op": "emit",
+      "call": "a",
+      "method": "track",
+      "data": {
+        "userId": "user-1",
+        "event": "event-a"
+      }
+    },
+    {
+      "op": "emit",
+      "call": "b",
+      "method": "track",
+      "data": {
+        "userId": "user-1",
+        "event": "event-b"
+      }
+    },
+    {
+      "op": "emit",
+      "call": "c",
+      "method": "track",
+      "data": {
+        "userId": "user-1",
+        "event": "event-c"
+      }
+    },
+    {
+      "op": "emit",
+      "call": "d",
+      "method": "track",
+      "data": {
+        "userId": "user-1",
+        "event": "event-d"
+      }
+    },
+    {
+      "op": "emit",
+      "call": "e",
+      "method": "track",
+      "data": {
+        "userId": "user-1",
+        "event": "event-e"
+      }
+    },
+    {
+      "op": "emit",
+      "call": "f",
+      "method": "track",
+      "data": {
+        "userId": "user-1",
+        "event": "event-f"
+      }
+    },
+    {
+      "op": "emit",
+      "call": "g",
+      "method": "track",
+      "data": {
+        "userId": "user-1",
+        "event": "event-g"
+      }
+    },
+    {
+      "op": "emit",
+      "call": "h",
+      "method": "track",
+      "data": {
+        "userId": "user-1",
+        "event": "event-h"
+      }
+    },
+    {
+      "op": "emit",
+      "call": "i",
+      "method": "track",
+      "data": {
+        "userId": "user-1",
+        "event": "event-i"
+      }
+    },
+    {
+      "op": "emit",
+      "call": "j",
+      "method": "track",
+      "data": {
+        "userId": "user-1",
+        "event": "event-j"
+      }
+    },
+    {
+      "op": "flush",
+      "rejected": true
+    },
+    {
+      "op": "assert",
+      "expect": {
+        "requests": [
+          {
+            "batch": [
+              {
+                "call": "a"
+              },
+              {
+                "call": "b"
+              },
+              {
+                "call": "c"
+              },
+              {
+                "call": "d"
+              },
+              {
+                "call": "e"
+              }
+            ]
+          },
+          {
+            "batch": [
+              {
+                "call": "f"
+              },
+              {
+                "call": "g"
+              },
+              {
+                "call": "h"
+              },
+              {
+                "call": "i"
+              },
+              {
+                "call": "j"
+              }
+            ]
+          }
+        ],
+        "errors": [
+          {
+            "attempts": 1,
+            "eventCalls": [
+              "a",
+              "b",
+              "c",
+              "d",
+              "e"
+            ],
+            "status": 400
+          }
+        ],
+        "delays": [
+          {
+            "from": 0,
+            "to": 1,
+            "minMs": 75,
+            "maxMs": 600
+          }
+        ]
+      }
+    },
+    {
+      "op": "emit",
+      "call": "k",
+      "method": "track",
+      "data": {
+        "userId": "user-1",
+        "event": "event-k"
+      }
+    },
+    {
+      "op": "flush",
+      "rejected": false
+    },
+    {
+      "op": "assert",
+      "expect": {
+        "requests": [
+          {
+            "batch": [
+              {
+                "call": "a"
+              },
+              {
+                "call": "b"
+              },
+              {
+                "call": "c"
+              },
+              {
+                "call": "d"
+              },
+              {
+                "call": "e"
+              }
+            ]
+          },
+          {
+            "batch": [
+              {
+                "call": "f"
+              },
+              {
+                "call": "g"
+              },
+              {
+                "call": "h"
+              },
+              {
+                "call": "i"
+              },
+              {
+                "call": "j"
+              }
+            ]
+          },
+          {
+            "batch": [
+              {
+                "call": "k"
+              }
+            ]
+          }
+        ],
+        "errors": [
+          {
+            "attempts": 1,
+            "eventCalls": [
+              "a",
+              "b",
+              "c",
+              "d",
+              "e"
+            ],
+            "status": 400
+          }
+        ]
+      }
+    }
+  ]
+}

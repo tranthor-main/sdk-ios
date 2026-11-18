@@ -1,0 +1,9 @@
+// Copy to Local.xcconfig; this file contains placeholders only.
+// Find your Personal Team in Xcode Settings > Accounts (Apple Accounts in Xcode 27).
+DEVELOPMENT_TEAM =
+// Replace with a unique identifier before building for an iPhone.
+PRODUCT_BUNDLE_IDENTIFIER = com.example.tranthor.ios-example
+// Leave empty for events/local previews. Paid-team APNs is a separate optional setup.
+TRANTHOR_PUSH_ENTITLEMENTS =
+// Match the signed aps-environment entitlement; production for TestFlight/App Store.
+TRANTHOR_APNS_ENVIRONMENT = development

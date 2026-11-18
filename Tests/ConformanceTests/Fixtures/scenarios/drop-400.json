@@ -1,0 +1,59 @@
+{
+  "id": "drop-400",
+  "description": "HTTP 400 is dropped without retry and reported exactly once with attempts=1.",
+  "capabilities": [
+    "core"
+  ],
+  "config": {
+    "writeKey": "Basic MDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAwOmNvbmZvcm1hbmNl",
+    "flushIntervalMs": 1000,
+    "baseDelay": 80,
+    "retries": 3
+  },
+  "server": {
+    "responses": [
+      {
+        "status": 400
+      }
+    ]
+  },
+  "steps": [
+    {
+      "op": "emit",
+      "call": "a",
+      "method": "track",
+      "data": {
+        "userId": "user-1",
+        "event": "event-a"
+      }
+    },
+    {
+      "op": "flush",
+      "rejected": true
+    },
+    {
+      "op": "assert",
+      "expect": {
+        "requests": [
+          {
+            "batch": [
+              {
+                "call": "a"
+              }
+            ]
+          }
+        ],
+        "errors": [
+          {
+            "attempts": 1,
+            "eventCalls": [
+              "a"
+            ],
+            "status": 400
+          }
+        ]
+      },
+      "observeMs": 220
+    }
+  ]
+}

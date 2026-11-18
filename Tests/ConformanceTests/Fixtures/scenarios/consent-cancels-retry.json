@@ -1,0 +1,90 @@
+{
+  "id": "consent-cancels-retry",
+  "description": "Opt-out cancels retry backoff and discards its events permanently.",
+  "capabilities": [
+    "core",
+    "consent"
+  ],
+  "config": {
+    "writeKey": "Basic MDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAwOmNvbmZvcm1hbmNl",
+    "batchSize": 1,
+    "baseDelay": 5000,
+    "retries": 1
+  },
+  "server": {
+    "responses": [
+      {
+        "status": 500
+      }
+    ]
+  },
+  "steps": [
+    {
+      "op": "emit",
+      "call": "a",
+      "method": "track",
+      "data": {
+        "userId": "user-1",
+        "event": "event-a"
+      }
+    },
+    {
+      "op": "assert",
+      "observeMs": 20,
+      "expect": {
+        "requests": [
+          {
+            "batch": [
+              {
+                "call": "a"
+              }
+            ]
+          }
+        ],
+        "errors": []
+      }
+    },
+    {
+      "op": "optOut"
+    },
+    {
+      "op": "optIn"
+    },
+    {
+      "op": "emit",
+      "call": "b",
+      "method": "track",
+      "data": {
+        "userId": "user-1",
+        "event": "event-b"
+      }
+    },
+    {
+      "op": "flush",
+      "rejected": false
+    },
+    {
+      "op": "assert",
+      "observeMs": 5100,
+      "expect": {
+        "requests": [
+          {
+            "batch": [
+              {
+                "call": "a"
+              }
+            ]
+          },
+          {
+            "batch": [
+              {
+                "call": "b"
+              }
+            ]
+          }
+        ],
+        "errors": []
+      }
+    }
+  ]
+}

@@ -1,0 +1,78 @@
+{
+  "id": "retries-exhausted",
+  "description": "Exhausted retries report one failure with attempts equal to retries plus one.",
+  "capabilities": [
+    "core"
+  ],
+  "config": {
+    "writeKey": "Basic MDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAwOmNvbmZvcm1hbmNl",
+    "flushIntervalMs": 1000,
+    "baseDelay": 80,
+    "retries": 2
+  },
+  "server": {
+    "responses": [
+      {
+        "status": 500
+      },
+      {
+        "status": 500
+      },
+      {
+        "status": 500
+      }
+    ]
+  },
+  "steps": [
+    {
+      "op": "emit",
+      "call": "a",
+      "method": "track",
+      "data": {
+        "userId": "user-1",
+        "event": "event-a"
+      }
+    },
+    {
+      "op": "flush",
+      "rejected": true
+    },
+    {
+      "op": "assert",
+      "expect": {
+        "requests": [
+          {
+            "batch": [
+              {
+                "call": "a"
+              }
+            ]
+          },
+          {
+            "batch": [
+              {
+                "call": "a"
+              }
+            ]
+          },
+          {
+            "batch": [
+              {
+                "call": "a"
+              }
+            ]
+          }
+        ],
+        "errors": [
+          {
+            "attempts": 3,
+            "eventCalls": [
+              "a"
+            ],
+            "status": 500
+          }
+        ]
+      }
+    }
+  ]
+}

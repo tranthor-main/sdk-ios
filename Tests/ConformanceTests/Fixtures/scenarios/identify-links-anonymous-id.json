@@ -1,0 +1,74 @@
+{
+  "id": "identify-links-anonymous-id",
+  "description": "The first identify after anonymous use, and a repeated identify of the same user, carry the stored anonymousId unchanged.",
+  "capabilities": [
+    "core",
+    "identity-link"
+  ],
+  "config": {
+    "writeKey": "Basic MDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAwOmNvbmZvcm1hbmNl",
+    "flushIntervalMs": 1000,
+    "baseDelay": 80,
+    "retries": 3
+  },
+  "server": {
+    "responses": []
+  },
+  "steps": [
+    {
+      "op": "anonymousId",
+      "ref": "visitor"
+    },
+    {
+      "op": "emit",
+      "call": "a",
+      "method": "identify",
+      "data": {
+        "userId": "user-1",
+        "traits": {
+          "plan": "trial"
+        }
+      }
+    },
+    {
+      "op": "anonymousId",
+      "ref": "visitor"
+    },
+    {
+      "op": "emit",
+      "call": "b",
+      "method": "identify",
+      "data": {
+        "userId": "user-1"
+      }
+    },
+    {
+      "op": "anonymousId",
+      "ref": "visitor"
+    },
+    {
+      "op": "flush",
+      "rejected": false
+    },
+    {
+      "op": "assert",
+      "expect": {
+        "requests": [
+          {
+            "batch": [
+              {
+                "call": "a",
+                "anonymousIdRef": "visitor"
+              },
+              {
+                "call": "b",
+                "anonymousIdRef": "visitor"
+              }
+            ]
+          }
+        ],
+        "errors": []
+      }
+    }
+  ]
+}

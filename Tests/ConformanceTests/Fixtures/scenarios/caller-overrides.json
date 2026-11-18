@@ -1,0 +1,113 @@
+{
+  "id": "caller-overrides",
+  "description": "Track, identify and page preserve caller stamps and context; track also preserves files.",
+  "capabilities": [
+    "core"
+  ],
+  "config": {
+    "writeKey": "Basic MDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAwOmNvbmZvcm1hbmNl",
+    "flushIntervalMs": 1000,
+    "baseDelay": 80,
+    "retries": 3
+  },
+  "server": {
+    "responses": []
+  },
+  "steps": [
+    {
+      "op": "emit",
+      "call": "track",
+      "method": "track",
+      "data": {
+        "userId": "user-1",
+        "messageId": "caller-track",
+        "timestamp": "2020-01-02T03:04:05.006Z",
+        "context": {
+          "locale": "en-US",
+          "custom": {
+            "nested": [
+              1,
+              2
+            ]
+          }
+        },
+        "event": "with-files",
+        "files": [
+          {
+            "type": "Base64Encoded",
+            "name": "fixture.txt",
+            "mimeType": "text/plain",
+            "data": "aGVsbG8="
+          }
+        ]
+      }
+    },
+    {
+      "op": "emit",
+      "call": "identify",
+      "method": "identify",
+      "data": {
+        "userId": "user-1",
+        "messageId": "caller-identify",
+        "timestamp": "2020-01-02T03:04:05.006Z",
+        "context": {
+          "locale": "en-US",
+          "custom": {
+            "nested": [
+              1,
+              2
+            ]
+          }
+        },
+        "traits": {
+          "name": "Caller"
+        }
+      }
+    },
+    {
+      "op": "emit",
+      "call": "page",
+      "method": "page",
+      "data": {
+        "userId": "user-1",
+        "messageId": "caller-page",
+        "timestamp": "2020-01-02T03:04:05.006Z",
+        "context": {
+          "locale": "en-US",
+          "custom": {
+            "nested": [
+              1,
+              2
+            ]
+          }
+        },
+        "name": "Caller page"
+      }
+    },
+    {
+      "op": "flush",
+      "rejected": false
+    },
+    {
+      "op": "assert",
+      "expect": {
+        "requests": [
+          {
+            "batch": [
+              {
+                "call": "track"
+              },
+              {
+                "call": "identify"
+              },
+              {
+                "call": "page"
+              }
+            ]
+          }
+        ],
+        "errors": []
+      }
+    }
+  ]
+}

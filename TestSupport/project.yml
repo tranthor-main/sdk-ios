@@ -1,0 +1,60 @@
+name: ConformanceHost
+options:
+  minimumXcodeGenVersion: 2.46.0
+  deploymentTarget:
+    iOS: '15.0'
+packages:
+  TranthorSDK:
+    path: ..
+settings:
+  base:
+    SWIFT_VERSION: '6.0'
+    SWIFT_STRICT_CONCURRENCY: complete
+    CODE_SIGNING_ALLOWED: NO
+    TARGETED_DEVICE_FAMILY: '1,2'
+targets:
+  ConformanceHost:
+    type: application
+    platform: iOS
+    sources: [AppDelegate.swift]
+    dependencies:
+      - sdk: AppIntents.framework
+        weak: true
+    settings:
+      base:
+        # Inspect the directly linked host when extracting AppIntents metadata.
+        ENABLE_DEBUG_DYLIB: NO
+        PRODUCT_BUNDLE_IDENTIFIER: com.tranthor.conformance.host
+        INFOPLIST_FILE: Info.plist
+  ConformanceTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - BundleResource.swift
+      - ../Tests/ConformanceTests/ConformanceTests.swift
+      - ../Tests/ConformanceTests/Runner.swift
+      - ../Tests/ConformanceTests/Schema.swift
+      - ../Tests/ConformanceTests/Declaration.swift
+      - ../Tests/ConformanceTests/LifecycleNotificationTests.swift
+      - path: ../Tests/ConformanceTests/Fixtures
+        type: folder
+        buildPhase: resources
+    dependencies:
+      - sdk: AppIntents.framework
+        weak: true
+      - target: ConformanceHost
+      - package: TranthorSDK
+    settings:
+      base:
+        IPHONEOS_DEPLOYMENT_TARGET: '17.0'
+        PRODUCT_BUNDLE_IDENTIFIER: com.tranthor.conformance.tests
+        GENERATE_INFOPLIST_FILE: YES
+schemes:
+  Conformance:
+    build:
+      targets:
+        ConformanceHost: all
+        ConformanceTests: [test]
+    test:
+      targets: [ConformanceTests]
+      gatherCoverageData: false

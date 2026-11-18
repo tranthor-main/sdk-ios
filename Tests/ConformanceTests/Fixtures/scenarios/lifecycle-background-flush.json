@@ -1,0 +1,55 @@
+{
+  "id": "lifecycle-background-flush",
+  "description": "Backgrounding the app flushes a partial queue before the interval.",
+  "capabilities": [
+    "core",
+    "lifecycle"
+  ],
+  "config": {
+    "writeKey": "Basic MDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAwOmNvbmZvcm1hbmNl",
+    "flushIntervalMs": 5000,
+    "baseDelay": 80,
+    "retries": 3
+  },
+  "server": {
+    "responses": []
+  },
+  "steps": [
+    {
+      "op": "emit",
+      "call": "a",
+      "method": "track",
+      "data": {
+        "userId": "user-1",
+        "event": "event-a"
+      }
+    },
+    {
+      "op": "background",
+      "label": "background"
+    },
+    {
+      "op": "assert",
+      "expect": {
+        "requests": [
+          {
+            "batch": [
+              {
+                "call": "a"
+              }
+            ]
+          }
+        ],
+        "errors": [],
+        "delays": [
+          {
+            "from": "background",
+            "to": 0,
+            "minMs": 0,
+            "maxMs": 2000
+          }
+        ]
+      }
+    }
+  ]
+}

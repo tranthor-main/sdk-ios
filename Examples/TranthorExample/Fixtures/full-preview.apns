@@ -1,0 +1,22 @@
+{
+  "aps": {
+    "alert": {
+      "title": "Tranthor full payload",
+      "subtitle": "Every key the server can send",
+      "body": "Link, custom data, badge +1 and time-sensitive. Replace the image host to see the image."
+    },
+    "sound": "default",
+    "mutable-content": 1,
+    "interruption-level": "time-sensitive",
+    "category": "TRANTHOR_PUSH"
+  },
+  "tranthor": {
+    "version": 1,
+    "deliveryId": "simulator-full-preview-1",
+    "imageUrl": "https://images.your-cdn.example/preview.png",
+    "badge": "increment"
+  },
+  "url": "tranthorexample://orders/42",
+  "orderId": "42",
+  "campaign": "spring"
+}
