@@ -27,7 +27,7 @@ public struct Configuration: Sendable {
     public let storageDirectory: URL?
     /// Events kept on disk and in memory; beyond it the oldest are dropped. Zero or less uses the default 10,000.
     public let maxQueueSize: Int
-    /// Called when a batch fails for good, or when events are dropped for lack of room. Optional.
+    /// Called when the server rejects a batch, or when events are dropped for lack of room. Not called when retries run out: those events are kept and sent later. Optional.
     public let onError: (@Sendable (BatchFailure) -> Void)?
 
     /// Creates a configuration. The numeric options take a `Double` so a value from JSON or a remote setting needs no

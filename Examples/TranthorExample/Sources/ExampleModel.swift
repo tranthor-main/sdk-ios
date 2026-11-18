@@ -71,7 +71,7 @@ final class ExampleModel: ObservableObject {
                     guard let self else { return }
                     let previous = self.reachable
                     self.reachable = online
-                    if previous != online { self.log(online ? "Network route available (delivery still requires a successful request)." : "Network unreachable. Batches are retried for about 15 s and then discarded.") }
+                    if previous != online { self.log(online ? "Network route available (delivery still requires a successful request)." : "Network unreachable. Events are kept and retried when the network is back.") }
                     // Reconnect never forces a flush: the SDK retry schedule remains observable.
                 }
             }

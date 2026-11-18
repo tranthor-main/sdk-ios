@@ -1,14 +1,19 @@
 import Foundation
 import CryptoKit
 
+/// One queued event and the number that orders it. The number only ever grows, so file dates are never read.
+struct QueuedEvent: Sendable {
+    let sequence: UInt64
+    let event: [String: JSONValue]
+}
+
+/// What the state file holds. The queued events are not part of it: each is its own file in the queue folder.
 struct StoredState: Codable, Sendable {
-    static let currentVersion = 1
+    static let currentVersion = 2
     let version = currentVersion
     var anonymousId = UUID().uuidString
     var userId: String?
     var optedOut = false
-    var queued: [[String: JSONValue]] = []
-    var active: [[String: JSONValue]] = []
     /// The push Installation last registered, so a token change, reset or opt-out can remove it.
     /// The token is therefore on disk (and in queued events until delivered): private storage, excluded from backup.
     var installation: StoredInstallation?
@@ -17,10 +22,11 @@ struct StoredState: Codable, Sendable {
 
     init() {}
 
-    private enum CodingKeys: String, CodingKey { case version, anonymousId, userId, optedOut, queued, active, installation, pendingRemovals }
+    private enum CodingKeys: String, CodingKey { case version, anonymousId, userId, optedOut, installation, pendingRemovals }
     init(from decoder: any Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
-        guard try values.decode(Int.self, forKey: .version) == Self.currentVersion else {
+        let version = try values.decode(Int.self, forKey: .version)
+        guard (1...Self.currentVersion).contains(version) else {
             throw DecodingError.dataCorruptedError(forKey: .version, in: values, debugDescription: "Unsupported state version")
         }
         // A missing identity is damage, not a default.
@@ -30,11 +36,39 @@ struct StoredState: Codable, Sendable {
         }
         userId = try values.decodeIfPresent(String.self, forKey: .userId)
         optedOut = try values.decodeIfPresent(Bool.self, forKey: .optedOut) ?? false
-        queued = try values.decodeIfPresent([[String: JSONValue]].self, forKey: .queued) ?? []
-        active = try values.decodeIfPresent([[String: JSONValue]].self, forKey: .active) ?? []
         // Damage to these optional fields must not cost the identity or the queue.
         installation = try? values.decodeIfPresent(StoredInstallation.self, forKey: .installation)
         pendingRemovals = (try? values.decodeIfPresent([[String: JSONValue]].self, forKey: .pendingRemovals)) ?? []
+    }
+}
+
+/// The undelivered events in memory, oldest first.
+struct EventQueue: Sendable {
+    var events: [QueuedEvent] = []
+    /// The number the next queued event gets.
+    var nextSequence: UInt64 = 1
+}
+
+/// The events a version 1 state file still held (`active`, then `queued`). Read once so `load()` can move them to queue files.
+private struct LegacyEvents: Decodable {
+    let events: [[String: JSONValue]]
+    private enum CodingKeys: String, CodingKey { case version, queued, active }
+    init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        guard try values.decode(Int.self, forKey: .version) == 1 else { events = []; return }
+        events = (try values.decodeIfPresent([[String: JSONValue]].self, forKey: .active) ?? [])
+            + (try values.decodeIfPresent([[String: JSONValue]].self, forKey: .queued) ?? [])
+    }
+}
+
+/// What `JSONStore.load()` found: the state file and the queue folder.
+@dynamicMemberLookup
+struct LoadedStore: Sendable {
+    var state = StoredState()
+    var queue = EventQueue()
+    subscript<Value>(dynamicMember keyPath: WritableKeyPath<StoredState, Value>) -> Value {
+        get { state[keyPath: keyPath] }
+        set { state[keyPath: keyPath] = newValue }
     }
 }
 
@@ -49,6 +83,8 @@ struct JSONStore: Sendable {
     let url: URL
     let consentURL: URL
     let corruptURL: URL
+    /// One file per queued event, named by its sequence number.
+    let queueURL: URL
     private var ownsVerifiedFile: Bool
     /// The last `load()` found state saying opted in but consent saying opted out: an `optOut()` that wrote
     /// consent and was interrupted before its state write. Read it before the first `save`, which hides it.
@@ -56,10 +92,12 @@ struct JSONStore: Sendable {
     private let writeData: @Sendable (Data, URL) throws -> Void
     private let read: @Sendable (URL) throws -> Data
     private let move: @Sendable (URL, URL) throws -> Void
+    private let removeFile: @Sendable (URL) throws -> Void
     init(directory: URL?, namespace: String,
          write: @escaping @Sendable (Data, URL) throws -> Void = { try JSONStore.write($0, to: $1) },
          read: @escaping @Sendable (URL) throws -> Data = { try Data(contentsOf: $0) },
-         move: @escaping @Sendable (URL, URL) throws -> Void = { try FileManager.default.moveItem(at: $0, to: $1) }) throws {
+         move: @escaping @Sendable (URL, URL) throws -> Void = { try FileManager.default.moveItem(at: $0, to: $1) },
+         removeFile: @escaping @Sendable (URL) throws -> Void = { try FileManager.default.removeItem(at: $0) }) throws {
         let base = try directory ?? FileManager.default.url(for: .applicationSupportDirectory,
             in: .userDomainMask, appropriateFor: nil, create: true).appendingPathComponent("TranthorSDK", isDirectory: true)
         // A digest keeps the folder name bounded and filesystem-safe for any namespace.
@@ -67,6 +105,9 @@ struct JSONStore: Sendable {
         let folder = base.appendingPathComponent("sha256-" + digest, isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         try Self.protect(folder)
+        queueURL = folder.appendingPathComponent("queue", isDirectory: true)
+        try FileManager.default.createDirectory(at: queueURL, withIntermediateDirectories: true)
+        try Self.protect(queueURL)
         url = folder.appendingPathComponent("state.json")
         consentURL = folder.appendingPathComponent("consent.json")
         corruptURL = folder.appendingPathComponent("state.corrupt.json")
@@ -74,8 +115,9 @@ struct JSONStore: Sendable {
         writeData = write
         self.read = read
         self.move = move
+        self.removeFile = removeFile
     }
-    mutating func load() throws -> StoredState {
+    mutating func load() throws -> LoadedStore {
         ownsVerifiedFile = false
         // Read both files before making any repairs. A transient I/O failure is not corruption.
         let stateData = try readIfPresent(url)
@@ -86,9 +128,10 @@ struct JSONStore: Sendable {
         var decodedOptedIn = false
         interruptedOptOut = false
         if let data = stateData {
-            if let decoded = try? JSONDecoder().decode(StoredState.self, from: data) {
-                state = decoded
-                decodedOptedIn = !decoded.optedOut
+            if let decoded = Self.decodeState(data) {
+                state = decoded.state
+                decodedOptedIn = !decoded.state.optedOut
+                try migrateLegacyEvents(decoded.legacy, state: state)
             } else {
                 if let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
                    let version = object["version"] as? Int, version > StoredState.currentVersion {
@@ -113,8 +156,96 @@ struct JSONStore: Sendable {
             || FileManager.default.fileExists(atPath: consentURL.deletingLastPathComponent().appendingPathComponent("consent.corrupt.json").path) {
             state.optedOut = true
         }
+        let queue = try loadQueue()
         ownsVerifiedFile = true
-        return state
+        return LoadedStore(state: state, queue: queue)
+    }
+    private static func decodeState(_ data: Data) -> (state: StoredState, legacy: [[String: JSONValue]])? {
+        guard let state = try? JSONDecoder().decode(StoredState.self, from: data),
+              let legacy = try? JSONDecoder().decode(LegacyEvents.self, from: data) else { return nil }
+        return (state, legacy.events)
+    }
+    /// Moves the events of a version 1 file into queue files, then rewrites the file without them. The file names
+    /// come from each event's position, so a run that stopped between the two steps repeats the same writes and
+    /// nothing is duplicated or lost.
+    private func migrateLegacyEvents(_ events: [[String: JSONValue]], state: StoredState) throws {
+        guard !events.isEmpty else { return }
+        do {
+            for (index, event) in events.enumerated() {
+                try writeData(JSONEncoder().encode(event), eventURL(UInt64(index + 1)))
+            }
+            try writeData(JSONEncoder().encode(state), url)
+        } catch {
+            throw TranthorError.storeTemporarilyUnavailable(underlying: error)
+        }
+    }
+    /// Event files are named by a zero-padded sequence number so that name order is sequence order.
+    static let sequenceWidth = 20
+    /// `json` for a queued event; `corrupt` for a file set aside because its bytes are not an event.
+    static func eventFileName(_ sequence: UInt64, extension fileExtension: String = "json") -> String {
+        String(format: "%0\(sequenceWidth)llu", sequence) + "." + fileExtension
+    }
+    /// The number at the start of a name, whatever follows it.
+    private static func leadingSequence(_ name: String) -> UInt64? {
+        name.count > sequenceWidth ? UInt64(name.prefix(sequenceWidth)) : nil
+    }
+    private func eventURL(_ sequence: UInt64) -> URL {
+        queueURL.appendingPathComponent(Self.eventFileName(sequence))
+    }
+    /// The queued events in order, by the number in each file name. A file that cannot be read stops loading: it is
+    /// not damage, and the queue must not be reordered or renamed around it.
+    private func loadQueue() throws -> EventQueue {
+        let names: [String]
+        do { names = try FileManager.default.contentsOfDirectory(atPath: queueURL.path) }
+        catch { throw TranthorError.storeTemporarilyUnavailable(underlying: error) }
+        var events: [QueuedEvent] = []
+        var highest: UInt64 = 0
+        for name in names {
+            guard let sequence = Self.leadingSequence(name) else { continue }
+            // A set-aside file still counts, so its number is never given to a new event.
+            highest = max(highest, sequence)
+            guard name == Self.eventFileName(sequence) else { continue }
+            let file = queueURL.appendingPathComponent(name)
+            guard let data = try readIfPresent(file) else { continue }
+            if let event = try? JSONDecoder().decode([String: JSONValue].self, from: data) {
+                events.append(QueuedEvent(sequence: sequence, event: event))
+            } else {
+                // Its bytes were read but are not an event: keep them for inspection and carry on with the rest.
+                try quarantine(file, to: queueURL.appendingPathComponent(Self.eventFileName(sequence, extension: "corrupt")))
+            }
+        }
+        events.sort { $0.sequence < $1.sequence }
+        return EventQueue(events: events, nextSequence: highest + 1)
+    }
+    /// Writes one file per event. If one write fails the files written so far stay: the caller takes them back with `remove`.
+    func append(_ events: [QueuedEvent]) throws {
+        guard ownsVerifiedFile else { throw TranthorError.storeTemporarilyUnavailable(underlying: CocoaError(.fileWriteNoPermission)) }
+        for queued in events { try writeData(JSONEncoder().encode(queued.event), eventURL(queued.sequence)) }
+    }
+    /// Deletes every event file in the queue folder, however it got there. Set-aside and unrelated files are left.
+    /// Every file is tried; the first failure is thrown afterwards.
+    func removeAll() throws {
+        var failure: (any Error)?
+        do {
+            for name in try FileManager.default.contentsOfDirectory(atPath: queueURL.path) {
+                guard let sequence = Self.leadingSequence(name), name == Self.eventFileName(sequence) else { continue }
+                do { try removeFile(queueURL.appendingPathComponent(name)) }
+                catch let error as CocoaError where error.code == .fileNoSuchFile {}
+                catch { failure = failure ?? error }
+            }
+        } catch { failure = error }
+        if let failure { throw TranthorError.storeTemporarilyUnavailable(underlying: failure) }
+    }
+    /// Deletes delivered or discarded events and returns the numbers whose file could not be deleted. A file that is already gone is fine.
+    @discardableResult
+    func remove(_ sequences: [UInt64]) -> [UInt64] {
+        var failed: [UInt64] = []
+        for sequence in sequences {
+            do { try removeFile(eventURL(sequence)) }
+            catch let error as CocoaError where error.code == .fileNoSuchFile {}
+            catch { failed.append(sequence) }
+        }
+        return failed
     }
     private func readIfPresent(_ url: URL) throws -> Data? {
         do { return try read(url) }

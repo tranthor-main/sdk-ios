@@ -3,7 +3,7 @@ import os
 
 /// Delivery: the flush timer, attempt cycles and retries, the opt-out removal queue, and the background and foreground hooks.
 extension TranthorSDK {
-    /// One new attempt cycle for undelivered opt-out removals (app start, foreground, optIn, optOut).
+    /// One new attempt cycle for undelivered opt-out removals (app start, return from the background, optIn, optOut).
     func triggerRemovals() {
         guard !state.pendingRemovals.isEmpty else { return }
         removalTriggers &+= 1
@@ -13,7 +13,20 @@ extension TranthorSDK {
     /// The delivery cycle's work: undelivered removals always, ordinary events only while opted in and
     /// only once no removal is waiting.
     var hasDeliverableWork: Bool {
-        state.pendingRemovals.isEmpty ? (!state.optedOut && !state.queued.isEmpty) : removalParked == nil
+        state.pendingRemovals.isEmpty ? (!state.optedOut && !queue.events.isEmpty && !pause.isRunning) : removalParked == nil
+    }
+    func startExhaustionPause() {
+        let sleep = sleep
+        pause.start { generation, delay in
+            Task { [weak self] in
+                do { try await sleep(delay) } catch { return }
+                await self?.exhaustionPauseEnded(generation)
+            }
+        }
+    }
+    func exhaustionPauseEnded(_ generation: Int) {
+        guard pause.finish(generation) else { return }
+        beginCycle()
     }
     func cancelTimer() {
         timerGeneration &+= 1
@@ -60,43 +73,58 @@ extension TranthorSDK {
         let events = dropped; dropped = []
         configuration.onError?(BatchFailure(error: DeliveryFailure(status: nil, message: "Queue capacity exceeded; oldest queued events dropped"), events: Self.redactingToken(events), attempts: 0))
     }
+    /// Gives every waiter that has no failure yet this one, so its `flush()` throws it.
+    func failWaiters(with failure: DeliveryFailure) {
+        for index in waiters.indices where waiters[index].failure == nil { waiters[index].failure = failure }
+    }
+    /// Deletes queue files. Any that cannot be deleted are remembered and deleted by a later cycle.
+    func deleteFiles(_ sequences: [UInt64]) {
+        pendingDeletion.formUnion(store.remove(sequences))
+    }
+    func retryPendingDeletions() {
+        guard !pendingDeletion.isEmpty else { return }
+        pendingDeletion = Set(store.remove(Array(pendingDeletion)))
+    }
     func runCycle() async {
+        retryPendingDeletions()
         let triggersAtStart = removalTriggers
         let removalsDelivered = state.pendingRemovals.isEmpty ? true : await deliverRemovals()
-        while removalsDelivered && !state.queued.isEmpty && !Task.isCancelled && !stopped && !state.optedOut {
-            state.active = Array(state.queued.prefix(configuration.batchSize))
-            state.queued.removeFirst(state.active.count)
-            persistDeliveryState()
+        var exhausted = false
+        var unacknowledged = false
+        while removalsDelivered && !queue.events.isEmpty && !Task.isCancelled && !stopped && !state.optedOut && !pause.isRunning {
+            let batch = Array(queue.events.prefix(configuration.batchSize))
+            inFlightCount = batch.count
             var terminal: DeliveryFailure?
             var acknowledged = false
-            switch await deliver(state.active, stopsOnOptOut: true) {
-            case .acknowledged: acknowledged = true
+            switch await deliver(batch.map(\.event), stopsOnOptOut: true, keepsExhaustedBatch: true) {
+            case .acknowledged: acknowledged = true; pause.reset()
             case .failed(let failure):
                 terminal = failure
-                for index in waiters.indices { if waiters[index].failure == nil { waiters[index].failure = failure } }
-            case .interrupted: break
+                failWaiters(with: failure)
+            case .exhausted(let failure):
+                exhausted = true; unacknowledged = true
+                failWaiters(with: failure)
+            case .interrupted: unacknowledged = true
             }
+            inFlightCount = 0
             if acknowledged || terminal != nil {
-                state.active = []
-                persistDeliveryState()
+                let finished = Set(batch.map(\.sequence))
+                queue.events.removeAll { finished.contains($0.sequence) }
+                deleteFiles(Array(finished))
             }
             // Never advance to another batch while this one remains unacknowledged.
             if !acknowledged && terminal == nil { break }
             if Task.isCancelled || stopped || state.optedOut || paused { break }
             if terminal?.retryable == true { break }
         }
-        // This is the sole recovery point for an unacknowledged batch. Cancellation is
-        // cycle-local and cannot be undone by a foreground notification or flush await.
-        let cancelled = Task.isCancelled || stopped || paused || !state.active.isEmpty
-        if !state.active.isEmpty && !state.optedOut {
-            state.queued = state.active + state.queued
-            state.active = []
-            persistDeliveryState()
-        }
+        // An unacknowledged batch is still queued (and on disk), so it is the head of the next cycle. Cancellation
+        // is cycle-local and cannot be undone by a foreground notification or flush await.
+        let cancelled = Task.isCancelled || stopped || paused || unacknowledged
         backoff = nil
         cycle = nil
+        if exhausted && !Task.isCancelled && !stopped && !paused && !state.optedOut { startExhaustionPause() }
         if let failure = removalParked, !state.pendingRemovals.isEmpty {
-            for index in waiters.indices where waiters[index].failure == nil { waiters[index].failure = failure }
+            failWaiters(with: failure)
         }
         let completions = waiters; waiters = []
         for waiter in completions {
@@ -111,10 +139,13 @@ extension TranthorSDK {
         }
         armTimer()
     }
-    enum DeliveryResult { case acknowledged, failed(DeliveryFailure), interrupted }
-    /// Sends one batch, retrying retryable failures with backoff. A failure that ends the attempts is reported to
-    /// `onError` once. `stopsOnOptOut` is false for opt-out removals, which are delivered after consent is withdrawn.
-    func deliver(_ batch: [[String: JSONValue]], stopsOnOptOut: Bool) async -> DeliveryResult {
+    enum DeliveryResult { case acknowledged, failed(DeliveryFailure), exhausted(DeliveryFailure), interrupted }
+    /// Sends one batch, retrying retryable failures with backoff. A rejection is reported to `onError` once. When the
+    /// retries run out the result is `.exhausted` if `keepsExhaustedBatch` (the caller keeps the events and `onError`
+    /// stays silent), otherwise it is reported like a rejection. Opt-out removals do not keep an exhausted batch because
+    /// they have their own retry rule: one failed cycle parks them until the next trigger, with no timed pause.
+    /// `stopsOnOptOut` is false for opt-out removals, which are delivered after consent is withdrawn.
+    func deliver(_ batch: [[String: JSONValue]], stopsOnOptOut: Bool, keepsExhaustedBatch: Bool = false) async -> DeliveryResult {
         defer { backoff = nil }
         for attempt in 0...configuration.retries {
             do {
@@ -127,6 +158,7 @@ extension TranthorSDK {
                 let failure = (error as? DeliveryFailure) ?? DeliveryFailure(status: nil, message: "Delivery failed", retryAfterMs: 0)
                 // A background window makes one attempt, never sleeps through a retry.
                 if backgroundToken != nil && failure.retryable { paused = true; return .interrupted }
+                if attempt >= configuration.retries && failure.retryable && keepsExhaustedBatch { return .exhausted(failure) }
                 if attempt >= configuration.retries || !failure.retryable {
                     configuration.onError?(BatchFailure(error: failure, events: Self.redactingToken(batch), attempts: attempt + 1))
                     return .failed(failure)
@@ -161,7 +193,7 @@ extension TranthorSDK {
                 if failure.retryable { removalParked = failure; return false }
                 state.pendingRemovals.removeFirst(min(batch.count, state.pendingRemovals.count))
                 persistDeliveryState()
-            case .interrupted: return false
+            case .exhausted, .interrupted: return false
             }
         }
         return true
@@ -199,8 +231,10 @@ extension TranthorSDK {
     }
     func resumeOnForeground() {
         lifecycleToken = nil; backgroundToken = nil; paused = false
-        // A return to the foreground (not a launch) retries an opt-out removal parked by a failure.
+        // A return from the background (not a launch) retries an opt-out removal parked by a failure.
         if sawBackground { sawBackground = false; triggerRemovals() }
+        // The app is in use again, so a kept batch is tried now rather than after the rest of the pause.
+        if pause.isRunning { pause.end(); beginCycle() }
         armTimer()
     }
 }
@@ -213,4 +247,38 @@ func sleepMilliseconds(_ ms: Double) async throws {
         remaining -= part
     }
     try Task.checkCancellation()
+}
+
+/// The wait after consecutive exhausted cycles: 30 s, doubling each time, at most 5 minutes. Only an explicit
+/// `flush()` or a return from the background attempts earlier. The count, the sleeping task and its generation
+/// change together, so a pause cannot be ended without its late completion being ignored.
+struct ExhaustionPause {
+    /// How many cycles in a row ran out of retries.
+    private var exhaustedCycles = 0
+    private(set) var task: Task<Void, Never>?
+    private var generation = 0
+    var isRunning: Bool { task != nil }
+    /// Counts one more exhausted cycle and starts its pause. `makeTask` returns the task that sleeps `delay`
+    /// milliseconds and then reports `generation` to `finish`.
+    mutating func start(_ makeTask: (_ generation: Int, _ delay: Double) -> Task<Void, Never>) {
+        exhaustedCycles += 1
+        generation &+= 1
+        task = makeTask(generation, min(30_000 * Double(1 << min(exhaustedCycles - 1, 8)), 300_000))
+    }
+    /// True if the pause that ended is the current one; a pause that was ended earlier is ignored.
+    mutating func finish(_ generation: Int) -> Bool {
+        guard generation == self.generation else { return false }
+        task = nil
+        return true
+    }
+    /// Cancels a running pause. The count stays, so the next exhausted cycle waits longer.
+    mutating func end() {
+        generation &+= 1
+        task?.cancel(); task = nil
+    }
+    /// Ends the pause and forgets the count: the next exhausted cycle waits 30 s again.
+    mutating func reset() {
+        end()
+        exhaustedCycles = 0
+    }
 }

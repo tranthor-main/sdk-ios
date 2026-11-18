@@ -22,7 +22,8 @@
           "persistence",
           "lifecycle",
           "consent",
-          "identity-link"
+          "identity-link",
+          "durable-queue"
         ]
       },
       "minItems": 1,
@@ -63,6 +64,23 @@
           }
         }
       }
+    },
+    "unless": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "core",
+          "transport",
+          "persistence",
+          "lifecycle",
+          "consent",
+          "identity-link",
+          "durable-queue"
+        ]
+      },
+      "minItems": 1,
+      "uniqueItems": true
     }
   },
   "required": [

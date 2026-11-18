@@ -3,16 +3,19 @@ import XCTest
 @testable import TranthorSDK
 
 /// Sleeps and responses are released explicitly; no wall-clock delays drive these races.
-private enum TestTimeout: Error { case waitingForSleeper(Double), waitingForCancellation(Int), waitingForRequests(Int), waitingForActorCheckpoint }
-private actor ManualSleeper {
+enum TestTimeout: Error { case waitingForSleeper(Double), waitingForCancellation(Int), waitingForRequests(Int), waitingForActorCheckpoint }
+actor ManualSleeper {
     struct Pending { let delay: Double; let continuation: CheckedContinuation<Void, any Error> }
     var pending: [Int: Pending] = [:]
     var next = 0
     var cancelled: Set<Int> = []
     var sleepWaiters: [(Double, CheckedContinuation<Int, Never>)] = []
     var cancelWaiters: [Int: [CheckedContinuation<Void, Never>]] = [:]
+    /// Every delay ever requested, in order, including sleeps that were released or cancelled.
+    var requested: [Double] = []
     func sleep(_ delay: Double) async throws {
         let id = next; next += 1
+        requested.append(delay)
         try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 pending[id] = Pending(delay: delay, continuation: continuation)
@@ -48,7 +51,7 @@ private actor ManualSleeper {
     }
     func releaseAll() { for id in Array(pending.keys) { release(id) } }
 }
-private actor ManualTransport: SDKTransport {
+actor ManualTransport: SDKTransport {
     var requests: [[[String: JSONValue]]] = []
     var automaticSuccess = false
     func autoSucceedFutureRequests() { automaticSuccess = true }
@@ -119,7 +122,6 @@ final class QueueTests: XCTestCase {
         if let secondFlush { do { try await secondFlush.value; XCTFail("Waiter attached to cancelled cycle must reject") } catch {} }
         let saved = try loadState(directory: root, namespace: "default")
         XCTAssertEqual(saved.queued.compactMap { $0["event"]?.string }, ["a"])
-        XCTAssertTrue(saved.active.isEmpty)
         try await sdk.track(event: "b")
         let recovery = Task { try await sdk.flush() }
         try await transport.wait(2)
@@ -147,7 +149,7 @@ final class QueueTests: XCTestCase {
         await expiry.value
         do { try await flush.value; XCTFail("Cancelled cycle waiter must reject") } catch {}
         let saved = try loadState(directory: root, namespace: "default")
-        XCTAssertTrue(saved.queued.isEmpty); XCTAssertTrue(saved.active.isEmpty)
+        XCTAssertTrue(saved.queued.isEmpty)
         await sdk.shutdown(); await sleeper.releaseAll()
     }
     func testBackgroundCutsRetryBackoffAndPersistsAfterOneImmediateAttempt() async throws {
@@ -168,7 +170,7 @@ final class QueueTests: XCTestCase {
         let requests = await transport.snapshot()
         XCTAssertEqual(requests.count, 2)
         let saved = try loadState(directory: root, namespace: "default")
-        XCTAssertEqual(saved.queued.count, 1); XCTAssertTrue(saved.active.isEmpty)
+        XCTAssertEqual(saved.queued.count, 1)
         await sdk.shutdown(); await sleeper.releaseAll()
     }
     func testForegroundDuringBackgroundSleeperCancellationDoesNotAdvanceUnacknowledgedBatch() async throws {
@@ -191,7 +193,6 @@ final class QueueTests: XCTestCase {
         XCTAssertEqual(requests.count, 1, "An unacknowledged batch cannot advance to the later batch")
         let saved = try loadState(directory: root, namespace: "default")
         XCTAssertEqual(saved.queued.compactMap { $0["event"]?.string }, ["a", "b"])
-        XCTAssertTrue(saved.active.isEmpty)
         await sdk.shutdown(); await sleeper.releaseAll()
     }
     func testStaleTimerCannotFlushLaterQueue() async throws {
@@ -264,7 +265,7 @@ final class QueueTests: XCTestCase {
         await sdk.shutdown(); await sleeper.releaseAll(); continuation.finish()
         let saved = try loadState(directory: root, namespace: "default")
         XCTAssertEqual(saved.queued.compactMap { $0["event"]?.string }, ["a", "c", "d"])
-        XCTAssertEqual(saved.queued.count + saved.active.count, 3)
+        XCTAssertEqual(saved.queued.count, 3)
         var failures: [BatchFailure] = []
         for await value in stream { failures.append(value) }
         XCTAssertEqual(failures.count, 1)
@@ -302,13 +303,15 @@ final class QueueTests: XCTestCase {
     func testPersistedActiveBatchRestoresBeforeWaitingEvents() async throws {
         let root = root(); defer { try? FileManager.default.removeItem(at: root) }
         let store = try JSONStore(directory: root, namespace: "default")
-        var state = StoredState()
+        let state = StoredState()
         func event(_ name: String) -> [String: JSONValue] {
             ["type": "track", "event": .string(name), "messageId": .string(name),
              "timestamp": "2026-10-13T00:00:00.000Z", "anonymousId": .string(state.anonymousId)]
         }
-        state.active = [event("inflight1"), event("inflight2")]; state.queued = [event("waiting")]
+        // The batch that was in flight at the last exit is still queued: its files are simply still there.
         try store.save(state); try store.saveConsent(false)
+        try store.append([QueuedEvent(sequence: 1, event: event("inflight1")), QueuedEvent(sequence: 2, event: event("inflight2")),
+                          QueuedEvent(sequence: 3, event: event("waiting"))])
         let transport = ManualTransport(), sleeper = ManualSleeper()
         await transport.autoSucceedFutureRequests()
         let sdk = try await sdk(root, transport, sleeper)

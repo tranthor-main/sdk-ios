@@ -204,7 +204,7 @@ final class StoreAvailabilityTests: XCTestCase {
             try store.save(StoredState()); try store.saveConsent(false)
             let url = filename == "state.json" ? store.url : store.consentURL
             var object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
-            object["version"] = 2
+            object["version"] = filename == "state.json" ? 3 : 2
             try JSONSerialization.data(withJSONObject: object).write(to: url)
             let sdk = try await TranthorSDK.configure(configuration(root))
             let optedOut = await sdk.isOptedOut; XCTAssertTrue(optedOut)
@@ -221,40 +221,11 @@ final class StoreAvailabilityTests: XCTestCase {
             continuation.yield($0); return try Data(contentsOf: $0)
         })
         var state = try store.load()
-        for index in 0..<10 { state.queued.append(["event": .string("e\(index)")]); try store.save(state) }
+        for index in 0..<10 { state.userId = "u\(index)"; try store.save(state.state) }
         continuation.finish()
         var urls: [URL] = []; for await url in reads { urls.append(url) }
         XCTAssertEqual(urls.filter { $0 == store.url }.count, 1, "Single-writer saves must not re-read or re-decode state")
         XCTAssertEqual(urls.filter { $0 == store.consentURL }.count, 1)
-    }
-    func testAdmissionAtTenThousandEventsBenchmark() async throws {
-        let root = root(); defer { try? FileManager.default.removeItem(at: root) }
-        var store = try JSONStore(directory: root, namespace: "default")
-        var state = StoredState()
-        let item: [String: JSONValue] = ["type": "track", "event": "Opened", "messageId": .string(UUID().uuidString),
-            "timestamp": "2026-10-13T00:00:00.000Z", "anonymousId": .string(UUID().uuidString), "properties": ["source": "app", "n": 1]]
-        state.queued = Array(repeating: item, count: 10_000)
-        try store.save(state); try store.saveConsent(false)
-        // Calibrate encoding + atomic writing on this machine; a direct re-decode adds
-        // several times that cost. A loose ratio tolerates host load and disk variation.
-        var encodeWriteMs: [Double] = []
-        let reference = store.url.deletingLastPathComponent().appendingPathComponent("benchmark.json")
-        for _ in 0..<10 {
-            let start = Date(); try JSONStore.write(JSONEncoder().encode(state), to: reference)
-            encodeWriteMs.append(Date().timeIntervalSince(start) * 1000)
-        }
-        let start = Date(); let sdk = try await TranthorSDK.configure(configuration(root))
-        let initMs = Date().timeIntervalSince(start) * 1000
-        var durations: [Double] = []
-        for index in 0..<10 {
-            let start = Date(); try await sdk.track(event: "e\(index)"); durations.append(Date().timeIntervalSince(start) * 1000)
-        }
-        await sdk.shutdown()
-        print("P6 init_ms=\(initMs) track_ms=\(durations) median_ms=\(durations.sorted()[5])")
-        let referenceMedian = encodeWriteMs.sorted()[5], trackMedian = durations.sorted()[5]
-        print("P6 encode_write_median_ms=\(referenceMedian) ratio=\(trackMedian / referenceMedian)")
-        XCTAssertLessThan(trackMedian, referenceMedian * 3, "Admission must not re-read and decode the full persisted queue")
-        XCTAssertEqual(try store.load().queued.count, 10_000)
     }
 }
 private struct AvailabilityTransport: SDKTransport {

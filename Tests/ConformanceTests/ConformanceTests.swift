@@ -29,10 +29,10 @@ final class ConformanceTests: XCTestCase {
             try require(ids.insert(id).inserted, "Duplicate scenario ID")
         }
         #if canImport(UIKit)
-        let capabilities = ["core", "transport", "persistence", "lifecycle", "consent", "identity-link"]
+        let capabilities = ["core", "transport", "persistence", "lifecycle", "consent", "identity-link", "durable-queue"]
         let lifecycle: J = "os-hook"
         #else
-        let capabilities = ["core", "transport", "persistence", "consent", "identity-link"]
+        let capabilities = ["core", "transport", "persistence", "consent", "identity-link", "durable-queue"]
         let lifecycle: J = .null
         #endif
         let name = "TranthorSDK Swift XCTest"
@@ -45,10 +45,9 @@ final class ConformanceTests: XCTestCase {
         for scenario in scenarios {
             let id = scenario["id"]?.string ?? ""
             if let filter, filter != id { continue } // Diagnostic mode still validates all files.
-            let missing = (scenario["capabilities"]?.array ?? []).compactMap(\.string).filter { !capabilities.contains($0) }
-            if !missing.isEmpty {
+            if let reason = skipReason(scenario, capabilities: capabilities) {
                 skipped += 1
-                try emitLine(["id": .string(id), "result": "skip", "reason": .string("Missing: " + missing.joined(separator: ","))])
+                try emitLine(["id": .string(id), "result": "skip", "reason": .string(reason)])
                 continue
             }
             let runner = ScenarioRunner(host: host, scenario: scenario, linking: capabilities.contains("identity-link"))

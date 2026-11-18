@@ -5,6 +5,9 @@
     "core",
     "transport"
   ],
+  "unless": [
+    "durable-queue"
+  ],
   "config": {
     "writeKey": "Basic MDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAwOmNvbmZvcm1hbmNl",
     "batchSize": 1,

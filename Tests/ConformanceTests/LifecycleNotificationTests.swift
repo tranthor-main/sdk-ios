@@ -53,7 +53,7 @@ final class LifecycleNotificationTests: XCTestCase {
         XCTAssertTrue(paused, "Failed background delivery must pause with the batch retained")
         await sdk.shutdown()
         var store = try JSONStore(directory: root, namespace: "default")
-        XCTAssertEqual(try store.load().queued.compactMap { $0["event"]?.string }, ["home"])
+        XCTAssertEqual(try store.load().queue.events.compactMap { $0.event["event"]?.string }, ["home"])
     }
     func testDidBecomeActiveNotificationResumesPausedDeliveryTimer() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

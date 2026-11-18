@@ -39,7 +39,7 @@ final class InstallationTests: XCTestCase {
     nonisolated fileprivate static func isSignIn(_ event: [String: JSONValue]) -> Bool {
         event["type"] == "identify" && event["userId"] == .string(customer)
     }
-    private func stored(_ root: URL) throws -> StoredState {
+    private func stored(_ root: URL) throws -> LoadedStore {
         var store = try JSONStore(directory: root, namespace: "installation")
         return try store.load()
     }

@@ -11,6 +11,8 @@ public actor TranthorSDK {
     let sleep: @Sendable (Double) async throws -> Void
     let lease: NamespaceLease
     var state: StoredState
+    /// The undelivered events. Not part of `state`: each is its own file on disk.
+    var queue: EventQueue
     let context: [String: JSONValue]
     var timer: Task<Void, Never>?
     var cycle: Task<Void, Never>?
@@ -18,6 +20,13 @@ public actor TranthorSDK {
     private var shutdownTask: Task<Void, Never>?
     var paused = false
     var timerGeneration = 0
+    /// Automatic delivery waits while this runs, after a cycle whose retries ran out. It is in memory only.
+    var pause = ExhaustionPause()
+    /// How many events at the head of the queue are being sent. They stay queued until acknowledged, and are never dropped for capacity.
+    var inFlightCount = 0
+    /// Event files that were delivered, rejected, trimmed or rolled back but could not be deleted. They are not in the
+    /// queue, so they are not sent again by this process, and each cycle tries to delete them again. In memory only.
+    var pendingDeletion: Set<UInt64> = []
     var backoff: Task<Void, any Error>?
     var backgroundToken: UUID?
     var lifecycleToken: UUID?
@@ -28,7 +37,7 @@ public actor TranthorSDK {
     var sentInstallation: [String]?
     var installationClockMs = Int64.min
     /// The retryable failure that ended the opt-out removals' attempt cycle. While set, nothing is sent and no
-    /// timer runs: only app start, a return to the foreground, optIn() and optOut() start one new cycle.
+    /// timer runs: only app start, a return from the background, optIn() and optOut() start one new cycle.
     var removalParked: DeliveryFailure?
     var removalTriggers: UInt64 = 0
     var sawBackground = false
@@ -50,30 +59,32 @@ public actor TranthorSDK {
     init(configuration: Configuration, transport: any SDKTransport,
          sleep: @escaping @Sendable (Double) async throws -> Void,
          storeWrite: @escaping @Sendable (Data, URL) throws -> Void = { try JSONStore.write($0, to: $1) },
-         storeMove: @escaping @Sendable (URL, URL) throws -> Void = { try FileManager.default.moveItem(at: $0, to: $1) }) async throws {
+         storeMove: @escaping @Sendable (URL, URL) throws -> Void = { try FileManager.default.moveItem(at: $0, to: $1) },
+         storeRemove: @escaping @Sendable (URL) throws -> Void = { try FileManager.default.removeItem(at: $0) }) async throws {
         let acquired = try await NamespaceRegistry.shared.acquire(directory: configuration.storageDirectory, namespace: configuration.storageNamespace)
-        let loaded: (JSONStore, StoredState, [[String: JSONValue]])
+        let loaded: (JSONStore, StoredState, EventQueue, [[String: JSONValue]], Set<UInt64>)
         do {
             loaded = try await Task.detached {
-                var store = try JSONStore(directory: configuration.storageDirectory, namespace: configuration.storageNamespace, write: storeWrite, move: storeMove)
+                var store = try JSONStore(directory: configuration.storageDirectory, namespace: configuration.storageNamespace, write: storeWrite, move: storeMove, removeFile: storeRemove)
                 var restored = try store.load()
-                restored.queued = restored.active + restored.queued
-                restored.active = []
-                if restored.optedOut { restored.queued = [] }
+                // Files to delete once the state below is durable: everything when opted out, else what is over capacity.
+                var discarded: [QueuedEvent] = []
+                if restored.optedOut { discarded = restored.queue.events; restored.queue.events = [] }
                 // An opt-out interrupted after its consent write never recorded its removal: leave it now, before
                 // the first save below hides that it happened.
                 if store.interruptedOptOut, let installation = restored.installation, restored.userId != nil {
                     let target = "\(installation.appId)|\(installation.token)"
                     restored.pendingRemovals.removeAll { TranthorSDK.installationTarget($0) == target }
-                    restored.pendingRemovals.append(optOutRemovalItem(restored, installation))
+                    restored.pendingRemovals.append(optOutRemovalItem(restored.state, installation))
                 }
-                let overflow = max(0, restored.queued.count - configuration.maxQueueSize)
-                let removed = Array(restored.queued.prefix(overflow))
-                restored.queued.removeFirst(overflow)
+                let overflow = max(0, restored.queue.events.count - configuration.maxQueueSize)
+                let removed = Array(restored.queue.events.prefix(overflow))
+                restored.queue.events.removeFirst(overflow)
                 // Persist fail-closed consent recovery independently of routine state writes.
                 try store.saveConsent(restored.optedOut)
-                try store.save(restored)
-                return (store, restored, removed)
+                try store.save(restored.state)
+                let undeleted = store.remove((discarded + removed).map(\.sequence))
+                return (store, restored.state, restored.queue, removed.map(\.event), Set(undeleted))
             }.value
         } catch {
             await NamespaceRegistry.shared.release(acquired)
@@ -87,11 +98,13 @@ public actor TranthorSDK {
         lease = acquired
         store = loaded.0
         state = loaded.1
+        queue = loaded.2
         context = configuration.automaticContext ? automaticContext() : [:]
         #if canImport(UIKit)
         lifecycle = await LifecycleObserver(sdk: self)
         #endif
-        reportDropped(loaded.2)
+        pendingDeletion = loaded.4
+        reportDropped(loaded.3)
         armTimer()
         // An opt-out removal left undelivered by a previous run gets one cycle at app start.
         triggerRemovals()
@@ -99,6 +112,7 @@ public actor TranthorSDK {
 
     deinit {
         timer?.cancel()
+        pause.end()
         cycle?.cancel()
         backoff?.cancel()
         dropNotification?.cancel()
@@ -143,7 +157,7 @@ public actor TranthorSDK {
         let previousAnonymousId = state.anonymousId
         // "" is not a user: storing it would hide the previous user from the rotation check below.
         let user = userId.flatMap { $0.isEmpty ? nil : $0 }
-        // Saved together with the new user ID (and the event) by the single state write in enqueue().
+        // Saved with the new user ID by the state write in admit(), after the event files.
         if let user, let previousUserId, !previousUserId.isEmpty, previousUserId != user {
             state.anonymousId = UUID().uuidString
         }
@@ -160,7 +174,7 @@ public actor TranthorSDK {
             if fingerprint != sentInstallation { registration = installationItem("Installation Registered", installation, details: true) }
         }
         do {
-            try enqueue("identify", data, alongside: registration.map { [$0] } ?? [])
+            try enqueue("identify", data, alongside: registration.map { [$0] } ?? [], savingState: true)
             if registration != nil { sentInstallation = fingerprint }
         } catch { state.userId = previousUserId; state.anonymousId = previousAnonymousId; throw error }
     }
@@ -208,7 +222,8 @@ public actor TranthorSDK {
         if caller != nil || !merged.isEmpty { data["context"] = .object(merged) }
         return data
     }
-    private func enqueue(_ type: String, _ payload: [String: JSONValue], alongside extra: [[String: JSONValue]] = []) throws {
+    private func enqueue(_ type: String, _ payload: [String: JSONValue], alongside extra: [[String: JSONValue]] = [],
+                         savingState: Bool = false) throws {
         guard !state.optedOut, !stopped else { return }
         var item = payload
         item["type"] = .string(type)
@@ -220,22 +235,42 @@ public actor TranthorSDK {
                 events: Self.redactingToken([item]), attempts: 0))
             throw error
         }
-        try admit([item] + extra)
+        try admit([item] + extra, savingState: savingState)
     }
-    /// Appends items in one durable write, dropping the oldest ordinary events if the queue is over capacity.
-    /// An `Installation Registered/Removed` goes last: it is dropped only when nothing else can be, and then
-    /// the oldest one that a newer event for the same token supersedes goes first.
-    func admit(_ items: [[String: JSONValue]]) throws {
-        let previous = state.queued
-        state.queued.append(contentsOf: items)
-        let waitingCapacity = max(0, configuration.maxQueueSize - state.active.count)
-        var removed: [[String: JSONValue]] = []
-        while state.queued.count > waitingCapacity { removed.append(state.queued.remove(at: Self.overflowIndex(state.queued))) }
-        do { try store.save(state) }
-        catch { state.queued = previous; throw error }
-        reportDropped(removed)
-        if state.queued.count >= configuration.batchSize { beginCycle() }
+    /// Appends items as event files, dropping the oldest ordinary events if the queue is over capacity. The batch in
+    /// flight is never dropped. An `Installation Registered/Removed` goes last: it is dropped only when nothing else
+    /// can be, and then the oldest one that a newer event for the same token supersedes goes first. Pass
+    /// `savingState` when the caller also changed the state and wants it saved with the events: the event files are
+    /// written first and removed again if the state write fails, so the caller's rollback leaves memory and disk the same.
+    func admit(_ items: [[String: JSONValue]], savingState: Bool = false) throws {
+        var next = queue.nextSequence
+        let added = items.map { item -> QueuedEvent in defer { next += 1 }; return QueuedEvent(sequence: next, event: item) }
+        var events = queue.events + added
+        var removed: [QueuedEvent] = []
+        while events.count > configuration.maxQueueSize && events.count > inFlightCount {
+            removed.append(events.remove(at: inFlightCount + Self.overflowIndex(events[inFlightCount...].map(\.event))))
+        }
+        let dropped = Set(removed.map(\.sequence))
+        let written = added.filter { !dropped.contains($0.sequence) }
+        do { try store.append(written) }
+        catch { takeBack(written.map(\.sequence), nextSequence: next); throw error }
+        if savingState {
+            do { try store.save(state) }
+            catch { takeBack(written.map(\.sequence), nextSequence: next); throw error }
+        }
+        deleteFiles(removed.map(\.sequence))
+        queue = EventQueue(events: events, nextSequence: next)
+        reportDropped(removed.map(\.event))
+        if queue.events.count - inFlightCount >= configuration.batchSize { beginCycle() }
         else { armTimer() }
+    }
+    /// Deletes the files of events that were written and then not admitted. A file that stays gets its number skipped,
+    /// so a later event cannot overwrite it before its deletion is retried.
+    private func takeBack(_ sequences: [UInt64], nextSequence next: UInt64) {
+        let stuck = store.remove(sequences)
+        guard !stuck.isEmpty else { return }
+        pendingDeletion.formUnion(stuck)
+        queue.nextSequence = max(queue.nextSequence, next)
     }
     private static func overflowIndex(_ queue: [[String: JSONValue]]) -> Int {
         if let ordinary = queue.firstIndex(where: { installationTarget($0) == nil }) { return ordinary }
@@ -254,12 +289,17 @@ public actor TranthorSDK {
         let installation = state.optedOut || state.userId == nil ? nil : state.installation
         // Built before the rotation, so it carries the outgoing identity.
         let removal = installation.map { installationItem("Installation Removed", $0, details: false) }
+        let previous = (userId: state.userId, anonymousId: state.anonymousId, sent: sentInstallation)
         state.userId = nil
         state.anonymousId = UUID().uuidString
         sentInstallation = nil
-        // The token stays held: the next identify() registers it to that customer. Nothing is registered now.
-        guard let removal else { try store.save(state); return }
-        try admit([removal])
+        do {
+            // The token stays held: the next identify() registers it to that customer. Nothing is registered now.
+            if let removal { try admit([removal], savingState: true) } else { try store.save(state) }
+        } catch {
+            (state.userId, state.anonymousId, sentInstallation) = previous
+            throw error
+        }
     }
     /// Stops collection and discards queued events. Persists across launches until `optIn()`. A registered push
     /// token is still removed from the server.
@@ -269,15 +309,18 @@ public actor TranthorSDK {
         if !state.optedOut { state.pendingRemovals = optOutRemovals() }
         sentInstallation = nil
         state.optedOut = true
-        state.queued = []
-        state.active = []
+        let discarded = queue.events.map(\.sequence)
+        queue.events = []
         dropped = []
         dropNotification?.cancel(); dropNotification = nil
         cancelTimer()
+        pause.reset()
         let pending = cycle
         pending?.cancel(); backoff?.cancel()
         // Consent must be durable before any queue/identity state can reopen it.
         let saveResult = Result { try store.saveConsent(true); try store.save(state) }
+        // After the consent write: if the app dies before this, the next start sees the opt-out and deletes them.
+        deleteFiles(discarded)
         await pending?.value
         triggerRemovals()
         try saveResult.get()
@@ -285,6 +328,9 @@ public actor TranthorSDK {
     /// Resumes collection after `optOut()`.
     public func optIn() throws {
         guard !stopped else { return }
+        // An opt-out that could not delete its files must not leave them to be sent after this: if they cannot be
+        // deleted now, the user stays opted out.
+        if state.optedOut { try store.removeAll(); pendingDeletion = [] }
         try store.saveConsent(false)
         state.optedOut = false
         try store.save(state)
@@ -307,8 +353,10 @@ public actor TranthorSDK {
         // A removal that could not be delivered holds the queue back until a trigger delivers it.
         if !state.pendingRemovals.isEmpty, let failure = removalParked { throw failure }
         emitDropped()
+        retryPendingDeletions()
         paused = false
-        if cycle == nil && state.queued.isEmpty { return }
+        pause.end()
+        if cycle == nil && queue.events.isEmpty { return }
         try await withCheckedThrowingContinuation { continuation in
             waiters.append(Waiter(continuation: continuation))
             beginCycle()
@@ -324,6 +372,7 @@ public actor TranthorSDK {
     }
     private func completeShutdown() async {
         cancelTimer()
+        pause.end()
         let pending = cycle
         pending?.cancel(); backoff?.cancel()
         // The delivery under way ends first (its request is cancelled with it), so nothing starts a request on the

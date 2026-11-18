@@ -12,7 +12,7 @@ final class CoreTests: XCTestCase {
         let fresh = try store.load()
         XCTAssertNotNil(UUID(uuidString: fresh.anonymousId))
         XCTAssertTrue(fresh.queued.isEmpty)
-        try store.save(fresh)
+        try store.save(fresh.state)
         XCTAssertEqual(try store.load().anonymousId, fresh.anonymousId)
         XCTAssertTrue(store.url.path.hasPrefix(root.path + "/"))
         try Data("{\"anonymousId\":\"invalid\"}".utf8).write(to: store.url)
@@ -162,7 +162,7 @@ private struct ErrorLogForUnitTests: Sendable {
     }
 }
 
-func loadState(directory: URL, namespace: String) throws -> StoredState {
+func loadState(directory: URL, namespace: String) throws -> LoadedStore {
     var store = try JSONStore(directory: directory, namespace: namespace)
     return try store.load()
 }

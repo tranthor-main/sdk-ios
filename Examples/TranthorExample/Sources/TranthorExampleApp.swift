@@ -21,7 +21,7 @@ struct ExampleView: View {
         NavigationView {
             Form {
                 if model.reachable == false {
-                    Section { Label("Network unreachable. Batches are retried for about 15 s and then discarded.", systemImage: "wifi.slash").foregroundColor(.orange) }
+                    Section { Label("Network unreachable. Events are kept and retried when the network is back.", systemImage: "wifi.slash").foregroundColor(.orange) }
                 }
                 Section("Workspace") {
                     SecureField("Write key", text: Binding(get: { model.writeKey }, set: model.editKey))

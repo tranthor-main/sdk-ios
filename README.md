@@ -13,7 +13,7 @@ Send events from an iOS app to [Tranthor](https://tranthor.com): identify custom
 Add the package with Swift Package Manager:
 
 ```swift
-.package(url: "https://github.com/tranthor-main/sdk-ios.git", from: "0.1.0")
+.package(url: "https://github.com/tranthor-main/sdk-ios.git", from: "0.2.0")
 ```
 
 or add the URL in Xcode under Package Dependencies. Then add the products you use to your target:
@@ -76,13 +76,15 @@ Only `writeKey` is required. A numeric option that is not usable never stops the
 | `storageNamespace` | `default` | Separates the stored state of instances in one app. |
 | `storageDirectory` | Application Support | Where state is stored. |
 | `maxQueueSize` | 10,000 | Events kept; beyond it the oldest are dropped. Zero or less uses the default. |
-| `onError` | none | Called with a `BatchFailure` (events, HTTP status, attempts) when a batch fails for good or events are dropped. Push tokens are redacted. |
+| `onError` | none | Called with a `BatchFailure` (events, HTTP status, attempts) when the server rejects a batch or events are dropped. Running out of retries is not reported: those events are kept. Push tokens are redacted. |
 
 A second instance with the same namespace and directory throws `TranthorError.namespaceInUse`. If the disk cannot be read or written, `configure` throws `TranthorError.storeTemporarilyUnavailable`; try again later.
 
 ## Delivery
 
 Events are sent as `POST /api/public/apps/batch`, one request at a time. A 2xx response is success. Network errors and the statuses 408, 425, 429 and 5xx are retried with doubling delays (or the server's `Retry-After`, honoured up to 30 seconds); any other status fails the batch at once. Redirects are refused. Each event gets a `messageId` and a UTC timestamp when it is queued, and keeps them across retries and relaunches.
+
+A batch whose retries run out is not discarded. It stays at the head of the queue with its original `messageId`s and timestamps, and `onError` is not called; an explicit `flush()` still throws the failure. Automatic delivery then pauses for 30 seconds, and for twice as long after each further failed cycle (60 s, 120 s, 240 s, then 5 minutes at most). During the pause the interval timer, new events and a full batch do not start an attempt. `flush()` and the app returning from the background attempt at once, a delivered batch resets the pause to 30 seconds, and a restarted app starts without a pause: its first attempt comes at the normal flush interval. Events are discarded only when the server rejects the batch with another status, on `optOut()`, or when the queue is full (the oldest go first and are reported with `attempts` 0).
 
 When the app goes to the background, queued events are sent in a background task, with one attempt per batch instead of waiting out a retry delay. State is stored with file protection `completeUntilFirstUserAuthentication` and excluded from backups.
 
@@ -92,8 +94,8 @@ When the app goes to the background, queued events are sent in a background task
 
 ## Current limits
 
-- A batch is dropped after its retries fail. With the defaults that is about 15 seconds without a connection.
-- Events are stored unencrypted in the app's container, and the whole queue is rewritten on each event.
+- Events are kept while offline, up to `maxQueueSize`; beyond that the oldest are dropped.
+- Events are stored unencrypted in the app's container, one small file per event.
 - There is no compression, alias, group or subscription API, and no automatic screen tracking.
 - If the app is killed after a request succeeds but before the result is saved, those events are sent again with the same `messageId`.
 - The SDK collects a user ID, the push token (as a device ID) and product interaction. Add anything you put in traits and properties to your own privacy declarations. Privacy manifests are included.

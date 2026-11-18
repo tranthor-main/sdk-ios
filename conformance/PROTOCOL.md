@@ -88,11 +88,29 @@ batch. A non-retryable status stops retrying immediately: a 500 then a 400 gives
 `attempts = 2`. It MUST NOT prevent batches queued behind it from being sent.
 A non-retryable rejection is reported by explicit flush after the remaining
 batches have been attempted. An exhausted retryable batch stops that explicit
-flush cycle; subsequent queued batches remain for the next interval, whose timer MUST be re-armed. The exhausted failed
-batch itself is discarded. Retention of later queued batches is exercised by
-`interval-after-retries-exhausted`. Long-backoff retention after exhaustion
-(including the 30 s cap) is **verified from source, not exercised by a scenario**:
-waiting through that boundary is too slow. Callback exceptions do not change delivery.
+flush cycle; subsequent queued batches remain for the next interval, whose timer MUST be re-armed. Without the
+`durable-queue` capability the exhausted failed batch itself is discarded; retention of later queued batches is
+exercised by `interval-after-retries-exhausted`. Long-backoff retention after exhaustion
+(including the 30 s Retry-After cap) is **verified from source, not exercised by a scenario**:
+waiting through that boundary is too slow.
+
+### Durable queue (suite 1.2.0)
+
+An adapter declaring `durable-queue` never discards a batch because its retries were exhausted:
+
+- The exhausted batch stays at the head of the queue with its original stamps. No batch queued behind it is
+  sent before it. The error callback is NOT invoked for it; an explicit flush still reports the failure.
+- After an exhausted cycle the SDK pauses automatic delivery. The first pause is 30 s and each further
+  consecutive exhausted cycle doubles it, up to 5 minutes. During the pause the interval timer, a newly queued
+  event and a full batch MUST NOT start an attempt. A delivered batch resets the pause.
+- An explicit flush starts an attempt cycle at once, pause or not. So does a return from the background to
+  the foreground for adapters that also declare `lifecycle`. The pause is not persisted, so a restarted SDK starts without one.
+- Events are discarded only by a non-retryable response, by opt-out, or when the queue is full (oldest first,
+  reported through the error callback with `attempts` 0).
+
+The pause lengths are **verified by the implementation's own tests with a controlled clock, not by a scenario**. The
+scenarios cover retention, ordering, the absence of the error callback, and that no attempt starts during the
+pause. Scenarios that describe the discard rule carry `"unless": ["durable-queue"]`. Callback exceptions do not change delivery.
 The core also rejects unserializable input before queueing with attempts 0;
 that behavior is outside the JSON-only scenarios.
 
@@ -114,6 +132,7 @@ maps and expected partial payload fields. Each file contains:
 | --- | --- |
 | `id`, `description` | Stable machine id and human explanation. |
 | `capabilities` | All capabilities required to execute the scenario. |
+| `unless` | Optional. Capabilities that replace this scenario: an adapter declaring any of them reports `skip` with the reason `superseded by <capability>`. |
 | `config` | SDK settings: required writeKey; optional batchSize, flushIntervalMs, baseDelay, retries, hostSuffix. Omitted settings use SDK defaults. hostSuffix is a trailing-slash test input appended to host. |
 | `server.responses` | Scripted responses, consumed once per ingestion request in arrival order. After exhaustion, return 204. |
 | `steps` | Sequential operations described below. The last step in the shipped scenarios is an assertion. |
@@ -281,7 +300,9 @@ reference reads `suiteVersion` directly from `Tests/ConformanceTests/Fixtures/VE
 `knownFailures: []`. That file is the single source of truth for suite versions.
 Run a scenario only if **all**
 its required capabilities are declared; otherwise report skip and list missing
-capabilities. A declared capability cannot turn a failed scenario into a skip.
+capabilities. A scenario whose `unless` names a declared capability is also reported skip; that field is fixed
+by the suite, never by the adapter. Apart from that, a declared capability cannot turn a failed scenario into a
+skip. A known failure for a scenario that `unless` skips MUST fail suite loading.
 CI must fail on schema errors or any failure. Emit one JSON line per scenario
 with `{id, result: "pass"|"fail"|"skip"|"xfail", reason?}` and a final summary containing
 `adapter`, `capabilities`, `suiteVersion`, `knownFailures`, `validated`,
@@ -297,6 +318,7 @@ capabilities so mobile checks cannot silently disappear through misdeclaration.
 | `lifecycle` | Background signal automatically flushes queued events. |
 | `consent` | Persistent optOut, queue/retry cancellation, and optIn collection recovery. |
 | `identity-link` | Stored identity: identify(userId) carries the stored anonymousId, and a user change rotates it first (suite 1.1.0). |
+| `durable-queue` | An exhausted retryable batch is kept and retried later instead of discarded (suite 1.2.0). |
 
 Storage medium is an implementation choice; retention and retry recovery follow
 the normative restart rules above. Process-death testing remains out of scope.
@@ -451,6 +473,11 @@ separate ports via CONFORMANCE_PORT or separate hosts.
 
 ## Suite changelog
 
+- **1.2.0**
+  - Adds the optional `durable-queue` capability and the scenario field `unless`.
+  - Adds five scenarios: `durable-exhausted-batch-retained`, `durable-exhausted-batch-keeps-order`, `durable-exhausted-dropped-connection`, `durable-exhausted-pause` and `durable-exhausted-batch-survives-restart`.
+  - Marks `retries-exhausted`, `interval-after-retries-exhausted` and `retry-dropped-connection-exhausted` with `"unless": ["durable-queue"]`.
+  - For adapters that don't declare `durable-queue`, every earlier scenario keeps its meaning.
 - **1.1.0**
   - Adds the optional `identity-link` capability, the `anonymousId` step, and the `anonymousIdRef` item matcher.
   - Adds three scenarios: `identify-links-anonymous-id`, `identify-rotates-on-user-change` and `explicit-anonymous-id-wins`.

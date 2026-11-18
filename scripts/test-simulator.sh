@@ -35,7 +35,7 @@ for ((n=0; n<100; n++)); do
 done
 curl --silent --fail "$host/control/time" >/dev/null
 # Xcode forwards TEST_RUNNER_* to the simulator test process, removing the prefix.
-# Verified by the runner requiring CONFORMANCE_HOST and executing all 39 scenarios (suite 1.1.0).
+# Verified by the runner requiring CONFORMANCE_HOST and executing every scenario of suite 1.2.0 (44; the three that `unless` supersedes report skip).
 export TEST_RUNNER_CONFORMANCE_HOST="$host"
 if [[ -n "${CONFORMANCE_SCENARIO:-}" ]]; then export TEST_RUNNER_CONFORMANCE_SCENARIO="$CONFORMANCE_SCENARIO"; fi
 python3 scripts/run-bounded.py 300 xcodebuild -project TestSupport/ConformanceHost.xcodeproj -scheme Conformance \

@@ -44,7 +44,7 @@ extension TranthorSDK {
         if items.isEmpty && fingerprint == sentInstallation { return }
         items.append(installationItem("Installation Registered", next, details: true))
         state.installation = next
-        do { try admit(items) } catch { state.installation = previous; throw error }
+        do { try admit(items, savingState: true) } catch { state.installation = previous; throw error }
         sentInstallation = fingerprint
     }
     func installationFingerprint(_ installation: StoredInstallation) -> [String] {

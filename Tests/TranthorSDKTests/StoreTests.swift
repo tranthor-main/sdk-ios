@@ -28,7 +28,6 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(restored.queued.count, 1)
         XCTAssertEqual(restored.queued.first?["messageId"], "stable-id")
         XCTAssertEqual(restored.queued.first?["timestamp"], "stable-time")
-        XCTAssertTrue(restored.active.isEmpty)
         XCTAssertFalse(FileManager.default.fileExists(atPath: corruptURL(store).path))
     }
 
@@ -42,11 +41,10 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(restored.anonymousId, anonymous)
         XCTAssertNil(restored.userId)
         XCTAssertTrue(restored.queued.isEmpty)
-        XCTAssertTrue(restored.active.isEmpty)
         XCTAssertFalse(restored.optedOut)
-        try store.save(restored)
+        try store.save(restored.state)
         let encoded = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: store.url)) as? [String: Any])
-        XCTAssertEqual(encoded["version"] as? Int, 1)
+        XCTAssertEqual(encoded["version"] as? Int, 2)
     }
 
     /// A truncated state file is quarantined and consent fails closed.
@@ -63,7 +61,7 @@ final class StoreTests: XCTestCase {
         XCTAssertNotNil(UUID(uuidString: restored.anonymousId))
         XCTAssertEqual(try Data(contentsOf: corruptURL(store)), truncated)
         XCTAssertFalse(FileManager.default.fileExists(atPath: store.url.path))
-        try store.save(restored)
+        try store.save(restored.state)
         XCTAssertEqual(try Data(contentsOf: corruptURL(store)), truncated)
         XCTAssertTrue(try store.load().optedOut)
     }
@@ -173,10 +171,18 @@ final class StoreTests: XCTestCase {
         let folder = first.url.deletingLastPathComponent()
         XCTAssertEqual(try folder.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup, true)
         XCTAssertEqual(try first.url.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup, true)
+        // The queue folder and its event files carry the same protections as the state file.
+        try first.append([QueuedEvent(sequence: 1, event: ["event": "kept"])])
+        let queueFolder = folder.appendingPathComponent("queue", isDirectory: true)
+        let eventFile = queueFolder.appendingPathComponent("00000000000000000001.json")
+        XCTAssertEqual(try queueFolder.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup, true)
+        XCTAssertEqual(try eventFile.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup, true)
         #if os(iOS)
-        let attributes = try FileManager.default.attributesOfItem(atPath: first.url.path)
-        let protection = (attributes[.protectionKey] as? FileProtectionType)?.rawValue ?? (attributes[.protectionKey] as? String)
-        XCTAssertEqual(protection, FileProtectionType.completeUntilFirstUserAuthentication.rawValue)
+        for url in [first.url, queueFolder, eventFile] {
+            let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+            let protection = (attributes[.protectionKey] as? FileProtectionType)?.rawValue ?? (attributes[.protectionKey] as? String)
+            XCTAssertEqual(protection, FileProtectionType.completeUntilFirstUserAuthentication.rawValue, url.lastPathComponent)
+        }
         #endif
     }
 
@@ -189,11 +195,11 @@ final class StoreTests: XCTestCase {
         XCTAssertTrue(restored.optedOut)
         // Mirror configure's explicit consent repair before normal state persistence.
         try store.saveConsent(restored.optedOut)
-        try store.save(restored)
+        try store.save(restored.state)
         XCTAssertTrue(try store.load().optedOut)
         try store.saveConsent(false)
         restored.optedOut = false
-        try store.save(restored)
+        try store.save(restored.state)
         XCTAssertFalse(try store.load().optedOut)
         XCTAssertEqual(try Data(contentsOf: corruptURL(store)), damaged)
     }

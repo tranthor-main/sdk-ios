@@ -98,4 +98,25 @@ final class RunnerValidationTests: XCTestCase {
         XCTAssertThrowsError(try subset([1], [1, 2], path: "array"))
         XCTAssertThrowsError(try subset(["a": 1], ["a": 2], path: "object"))
     }
+    func testDeclarationAcceptsTheDurableQueueCapability() throws {
+        let scenario: J = ["id": "case", "capabilities": ["core", "durable-queue"], "steps": []]
+        try Declaration(name: "test", capabilities: ["core", "durable-queue"], suiteVersion: "1", lifecycleSource: nil, knownFailures: [])
+            .validate(scenarios: [scenario], version: "1")
+    }
+    func testScenarioIsSkippedWhenACapabilityItIsSupersededByIsDeclared() throws {
+        let scenario: J = ["id": "case", "capabilities": ["core"], "unless": ["durable-queue"], "steps": []]
+        XCTAssertEqual(skipReason(scenario, capabilities: ["core", "durable-queue"]), "superseded by durable-queue")
+        XCTAssertNil(skipReason(scenario, capabilities: ["core"]))
+        let needsConsent: J = ["id": "case", "capabilities": ["core", "consent"], "steps": []]
+        XCTAssertEqual(skipReason(needsConsent, capabilities: ["core"]), "Missing: consent")
+    }
+    func testKnownFailureForASupersededScenarioFailsSuiteLoading() throws {
+        let superseded: J = ["id": "old-rule", "capabilities": ["core"], "unless": ["durable-queue"], "steps": []]
+        let failure = KnownFailure(id: "old-rule", reason: "r", tracking: "issue-1")
+        XCTAssertThrowsError(try Declaration(name: "test", capabilities: ["core", "durable-queue"], suiteVersion: "1", lifecycleSource: nil, knownFailures: [failure])
+            .validate(scenarios: [superseded], version: "1"))
+        // Without the superseding capability the scenario runs, so a known failure for it is allowed.
+        try Declaration(name: "test", capabilities: ["core"], suiteVersion: "1", lifecycleSource: nil, knownFailures: [failure])
+            .validate(scenarios: [superseded], version: "1")
+    }
 }

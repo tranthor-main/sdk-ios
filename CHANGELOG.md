@@ -4,6 +4,19 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.2.0] - 2026-11-18
+
+### Changed
+
+- Events are no longer discarded when their retries run out. A batch that could not be delivered (no connection, or a 408, 425, 429 or 5xx response) stays at the front of the queue with its original `messageId`s and timestamps, and is sent again later. `onError` is no longer called when retries run out, and `flush()` still throws the failure.
+- After a batch runs out of retries, automatic delivery pauses: 30 seconds, then 60, 120, 240 and at most 5 minutes while delivery keeps failing. During the pause the interval timer, new events and a full batch do not start a request. `flush()` and the app returning from the background try at once, a delivered batch resets the pause, and a restarted app starts without one: its first attempt comes at the normal flush interval.
+- Events are still discarded when the server rejects a batch with another status, on `optOut()`, and when the queue is full (the oldest go first and are reported to `onError` with `attempts` 0).
+- Each queued event is now its own small file, so tracking an event no longer rewrites the whole queue. Events and identity from 0.1.0 are moved automatically the first time 0.2.0 starts; nothing needs to be done.
+
+### Notes
+
+- The state format changed. Going back to 0.1.0 after running 0.2.0 is not supported: 0.1.0 sets the new state file aside and starts with collection off until `optIn()`.
+
 ## [0.1.0] - 2026-11-18
 
 First public release.
