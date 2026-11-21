@@ -187,6 +187,29 @@ final class TranthorExampleUITests: XCTestCase {
         XCTAssertNotNil(event.properties.runId.flatMap(UUID.init(uuidString:)))
         app.terminate()
     }
+    /// Page and Screen share one form row. Each tap must run only its own action: one accepted call per tap.
+    func testPageAndScreenEachCountOneCall() async throws {
+        let host = try XCTUnwrap(ProcessInfo.processInfo.environment["TRANTHOR_HOST"])
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing"]
+        app.launchEnvironment = ["TRANTHOR_HOST": host, "TRANTHOR_WRITE_KEY": "conformance-fixture", "TRANTHOR_FLUSH_INTERVAL_MS": "60000"]
+        app.launch()
+        let status = app.staticTexts["configurationStatus"]
+        XCTAssertTrue(status.waitForExistence(timeout: 10))
+        await fulfillment(of: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@", "Configured"), object: status)], timeout: 10)
+        let page = app.buttons["page"]
+        for _ in 0..<10 { if page.isHittable { break }; app.swipeUp() }
+        XCTAssertTrue(page.isHittable)
+        let accepted = app.staticTexts["acceptedCalls"]
+        page.tap()
+        await fulfillment(of: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@", "Accepted event calls this launch: 1"), object: accepted)], timeout: 10)
+        app.buttons["screen"].tap()
+        await fulfillment(of: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@", "Accepted event calls this launch: 2"), object: accepted)], timeout: 10)
+        // A late second action would move the count past 2.
+        try await Task.sleep(for: .seconds(1))
+        XCTAssertEqual(accepted.label, "Accepted event calls this launch: 2")
+        app.terminate()
+    }
     func testTaggedTrackAndFlush() async throws {
         let host = try XCTUnwrap(ProcessInfo.processInfo.environment["TRANTHOR_HOST"],
                                  "Run scripts/test-example-simulator.sh to forward the mock host with TEST_RUNNER_.")

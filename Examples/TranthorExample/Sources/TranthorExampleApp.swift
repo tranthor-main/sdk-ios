@@ -46,11 +46,12 @@ struct ExampleView: View {
                     Text("Accepted event calls this launch: \(model.acceptedCalls)").accessibilityIdentifier("acceptedCalls")
                     Stepper("Burst: \(model.burstCount)", value: $model.burstCount, in: 1...1000)
                     Button("Track burst of \(model.burstCount)") { Task { await model.send(.track, count: model.burstCount) } }
+                    // Two default-style buttons in one Form row all fire on any tap in the row; borderless ones act alone.
                     HStack {
-                        Button("Page") { Task { await model.send(.page) } }
+                        Button("Page") { Task { await model.send(.page) } }.accessibilityIdentifier("page")
                         Spacer()
-                        Button("Screen") { Task { await model.send(.screen) } }
-                    }
+                        Button("Screen") { Task { await model.send(.screen) } }.accessibilityIdentifier("screen")
+                    }.buttonStyle(.borderless)
                     Button(model.flushing ? "Flushing…" : "Flush") { Task { await model.flush() } }
                         .disabled(model.flushing).accessibilityIdentifier("flush")
                 }.disabled(!model.configured || model.configuring)
