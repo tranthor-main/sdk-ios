@@ -4,6 +4,12 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- Example app: tapping "Page" or "Screen" sent both a page and a screen event, because the two buttons share one form row. Each button now sends only its own event. The SDK itself is unchanged.
+
 ## [0.2.1] - 2026-11-18
 
 ### Changed
