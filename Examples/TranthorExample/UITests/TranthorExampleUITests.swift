@@ -233,6 +233,21 @@ final class TranthorExampleUITests: XCTestCase {
         await fulfillment(of: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@", "Accepted event calls this launch: 2"), object: accepted)], timeout: 10)
         try await Task.sleep(for: .seconds(1))
         XCTAssertEqual(accepted.label, "Accepted event calls this launch: 2")
+        // Two accepted calls alone would also pass if both halves ran the same action: read what was sent.
+        let flush = app.buttons["flush"]
+        for _ in 0..<10 { if flush.isHittable { break }; app.swipeUp() }
+        flush.tap()
+        let url = try XCTUnwrap(URL(string: "\(host)/control/requests"))
+        var sent: [SentEvent] = []
+        for _ in 0..<150 {
+            let (data, _) = try await URLSession.shared.data(from: url)
+            let requests = try JSONDecoder().decode(SentRequests.self, from: data).requests
+            sent = requests.flatMap { $0.body?.batch ?? [] }
+            if sent.count >= 2 && requests.allSatisfy({ $0.body != nil }) { break }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        XCTAssertEqual(sent.map(\.type), ["page", "screen"], "The left half sends a page event and the right half a screen event")
+        XCTAssertEqual(sent.map(\.name), ["iOS Example", "Example Home"])
         app.terminate()
     }
     func testTaggedTrackAndFlush() async throws {
@@ -283,6 +298,11 @@ final class TranthorExampleUITests: XCTestCase {
         app.terminate()
     }
     private struct Records: Decodable { let requests: [Request] }
+    // Page and screen events have a name and no event field, so they need their own shape.
+    private struct SentRequests: Decodable { let requests: [SentRequest] }
+    private struct SentRequest: Decodable { let body: SentBody? }
+    private struct SentBody: Decodable { let batch: [SentEvent] }
+    private struct SentEvent: Decodable { let type: String; let name: String? }
     // The control API publishes a record when headers arrive, before its body is parsed.
     // Poll until body is present; a request that never completes still fails the test.
     private struct Request: Decodable { let method: String; let path: String; let body: Body? }
