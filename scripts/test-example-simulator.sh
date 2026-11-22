@@ -29,6 +29,7 @@ curl --silent --fail "$host/control/time" >/dev/null
 # The UI test requires TRANTHOR_HOST and verifies the ingestion request through the control API.
 export TEST_RUNNER_TRANTHOR_HOST="$host"
 scripts/generate-example.sh
+# Signed to run locally (no team needed): an unsigned simulator app cannot save the typed key to the Keychain.
 python3 scripts/run-bounded.py 300 xcodebuild -project Examples/TranthorExample/TranthorExample.xcodeproj -scheme TranthorExample \
   -destination "platform=iOS Simulator,name=$simulator_name" -derivedDataPath DerivedData/ExampleUITests -collect-test-diagnostics never \
-  -parallel-testing-enabled NO CODE_SIGNING_ALLOWED=NO test
+  -parallel-testing-enabled NO CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO test

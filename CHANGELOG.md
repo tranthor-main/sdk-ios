@@ -10,6 +10,7 @@ All notable changes to this project are documented here. The format follows
 
 - Example app: tapping "Page" or "Screen" sent both a page and a screen event, because the two buttons share one form row. Each button now sends only its own event. The SDK itself is unchanged.
 - Example app: "Page" and "Screen" each respond to a tap anywhere in their half of the row, not only on the word.
+- Example app on the simulator: a typed write key is saved again, so the app configures itself on the next launch. The simulator scripts built the app unsigned, and an unsigned app cannot use the Keychain.
 
 ## [0.2.1] - 2026-11-18
 
