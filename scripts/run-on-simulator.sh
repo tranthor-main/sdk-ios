@@ -24,8 +24,9 @@ else
   # Xcode 27 moved Simulator into Device Hub.
   open -a "$developer_dir/../Applications/DeviceHub.app"
 fi
+# Signed to run locally (no team needed): an unsigned simulator app cannot save the typed key to the Keychain.
 xcodebuild -project Examples/TranthorExample/TranthorExample.xcodeproj -scheme TranthorExample \
-  -destination "platform=iOS Simulator,id=$sim_id" -derivedDataPath DerivedData/Example -collect-test-diagnostics never CODE_SIGNING_ALLOWED=NO build
+  -destination "platform=iOS Simulator,id=$sim_id" -derivedDataPath DerivedData/Example -collect-test-diagnostics never CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO build
 app=DerivedData/Example/Build/Products/Debug-iphonesimulator/TranthorExample.app
 bundle_id=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Info.plist")
 xcrun simctl install "$sim_id" "$app"

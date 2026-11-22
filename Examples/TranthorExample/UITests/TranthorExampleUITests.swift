@@ -210,6 +210,30 @@ final class TranthorExampleUITests: XCTestCase {
         XCTAssertEqual(accepted.label, "Accepted event calls this launch: 2")
         app.terminate()
     }
+    /// A key typed into the app is saved on the device, so the next launch configures the SDK without asking again.
+    func testTypedKeyConfiguresTheSDKAgainAfterRelaunch() async throws {
+        let host = try XCTUnwrap(ProcessInfo.processInfo.environment["TRANTHOR_HOST"])
+        let app = XCUIApplication()
+        // No launch key: the key below is typed, which is the only kind the app saves.
+        app.launchEnvironment = ["TRANTHOR_HOST": host]
+        app.launch()
+        let status = app.staticTexts["configurationStatus"]
+        XCTAssertTrue(status.waitForExistence(timeout: 10))
+        let forget = app.buttons["forgetKey"]
+        forget.tap()
+        await fulfillment(of: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@", "Not configured"), object: status)], timeout: 10)
+        let key = app.secureTextFields["writeKey"]
+        key.tap()
+        key.typeText("conformance-fixture")
+        app.buttons["configure"].tap()
+        await fulfillment(of: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@", "Configured"), object: status)], timeout: 10)
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(status.waitForExistence(timeout: 10))
+        await fulfillment(of: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@", "Configured"), object: status)], timeout: 10)
+        app.buttons["forgetKey"].tap()
+        app.terminate()
+    }
     func testTaggedTrackAndFlush() async throws {
         let host = try XCTUnwrap(ProcessInfo.processInfo.environment["TRANTHOR_HOST"],
                                  "Run scripts/test-example-simulator.sh to forward the mock host with TEST_RUNNER_.")
