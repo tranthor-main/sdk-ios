@@ -210,6 +210,31 @@ final class TranthorExampleUITests: XCTestCase {
         XCTAssertEqual(accepted.label, "Accepted event calls this launch: 2")
         app.terminate()
     }
+    /// Each button owns its half of the shared row: a tap beside the word, not only on it, sends that button's event.
+    func testPageAndScreenRespondToTapsBesideTheirLabels() async throws {
+        let host = try XCTUnwrap(ProcessInfo.processInfo.environment["TRANTHOR_HOST"])
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing"]
+        app.launchEnvironment = ["TRANTHOR_HOST": host, "TRANTHOR_WRITE_KEY": "conformance-fixture", "TRANTHOR_FLUSH_INTERVAL_MS": "60000"]
+        app.launch()
+        let status = app.staticTexts["configurationStatus"]
+        XCTAssertTrue(status.waitForExistence(timeout: 10))
+        await fulfillment(of: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@", "Configured"), object: status)], timeout: 10)
+        let page = app.buttons["page"], screen = app.buttons["screen"]
+        for _ in 0..<10 { if page.isHittable { break }; app.swipeUp() }
+        XCTAssertTrue(page.isHittable)
+        // Points on the row between the two words: 30% and 70% of the way from "Page" to "Screen".
+        let left = page.frame.minX, width = screen.frame.maxX - page.frame.minX, y = page.frame.midY
+        let origin = app.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0))
+        let accepted = app.staticTexts["acceptedCalls"]
+        origin.withOffset(CGVector(dx: left + width * 0.3, dy: y)).tap()
+        await fulfillment(of: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@", "Accepted event calls this launch: 1"), object: accepted)], timeout: 10)
+        origin.withOffset(CGVector(dx: left + width * 0.7, dy: y)).tap()
+        await fulfillment(of: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@", "Accepted event calls this launch: 2"), object: accepted)], timeout: 10)
+        try await Task.sleep(for: .seconds(1))
+        XCTAssertEqual(accepted.label, "Accepted event calls this launch: 2")
+        app.terminate()
+    }
     func testTaggedTrackAndFlush() async throws {
         let host = try XCTUnwrap(ProcessInfo.processInfo.environment["TRANTHOR_HOST"],
                                  "Run scripts/test-example-simulator.sh to forward the mock host with TEST_RUNNER_.")
