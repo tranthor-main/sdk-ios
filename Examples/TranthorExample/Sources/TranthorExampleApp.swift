@@ -47,10 +47,14 @@ struct ExampleView: View {
                     Stepper("Burst: \(model.burstCount)", value: $model.burstCount, in: 1...1000)
                     Button("Track burst of \(model.burstCount)") { Task { await model.send(.track, count: model.burstCount) } }
                     // Two default-style buttons in one Form row all fire on any tap in the row; borderless ones act alone.
-                    HStack {
-                        Button("Page") { Task { await model.send(.page) } }.accessibilityIdentifier("page")
-                        Spacer()
-                        Button("Screen") { Task { await model.send(.screen) } }.accessibilityIdentifier("screen")
+                    // A borderless button is only as large as its label, so each label fills its half of the row.
+                    HStack(spacing: 0) {
+                        Button { Task { await model.send(.page) } } label: {
+                            Text("Page").frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+                        }.accessibilityIdentifier("page")
+                        Button { Task { await model.send(.screen) } } label: {
+                            Text("Screen").frame(maxWidth: .infinity, alignment: .trailing).contentShape(Rectangle())
+                        }.accessibilityIdentifier("screen")
                     }.buttonStyle(.borderless)
                     Button(model.flushing ? "Flushing…" : "Flush") { Task { await model.flush() } }
                         .disabled(model.flushing).accessibilityIdentifier("flush")
