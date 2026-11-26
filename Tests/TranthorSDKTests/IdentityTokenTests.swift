@@ -989,7 +989,8 @@ final class IdentityTokenTests: XCTestCase {
         try await sdk.track(event: "anon", anonymousId: "anon-1")
         let failure = await flushFails(sdk)
         XCTAssertEqual(failure?.status, 403, "events were given up, so an explicit flush says so")
-        XCTAssertEqual(reports.errors.first?.events.compactMap { $0["event"]?.string }, ["mine"])
+        XCTAssertEqual(reports.errors.count, 1, "reported once")
+        XCTAssertEqual(reports.errors.flatMap(\.events).compactMap { $0["event"]?.string }, ["mine"], "and nothing else was reported")
         let sent = await wire.sent
         XCTAssertEqual(sent.last?.batch.compactMap { $0["event"]?.string }, ["anon"])
         await sdk.shutdown()
