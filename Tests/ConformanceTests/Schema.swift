@@ -18,7 +18,7 @@ struct Schema {
         guard let map = rule.object else { throw CheckFailure("Invalid schema at \(path)") }
         let supported: Set<String> = ["$schema", "$id", "title", "definitions", "$ref", "type", "properties", "required",
             "additionalProperties", "enum", "const", "pattern", "minLength", "minimum", "maximum", "items", "minItems",
-            "uniqueItems", "contains", "oneOf", "anyOf", "allOf", "if", "then"]
+            "uniqueItems", "contains", "oneOf", "anyOf", "allOf", "not", "if", "then", "else"]
         try require(Set(map.keys).isSubset(of: supported), "Unsupported schema keyword \(path)")
         if let ref = map["$ref"]?.string {
             try require(ref.hasPrefix("#/"), "Nonlocal schema ref")
@@ -75,8 +75,15 @@ struct Schema {
                             "\(keyword) mismatch \(path)")
             }
         }
-        if let condition = map["if"], (try? validate(value, schema: condition)) != nil, let then = map["then"] {
-            try validate(value, schema: then, path: path)
+        if let negated = map["not"] {
+            try require((try? validate(value, schema: negated, path: path)) == nil, "not mismatch \(path)")
+        }
+        if let condition = map["if"] {
+            if (try? validate(value, schema: condition)) != nil {
+                if let then = map["then"] { try validate(value, schema: then, path: path) }
+            } else if let otherwise = map["else"] {
+                try validate(value, schema: otherwise, path: path)
+            }
         }
     }
     private func matches(_ value: J, type: String) -> Bool {
@@ -96,7 +103,28 @@ struct Schema {
 func validateReferences(_ scenario: J) throws {
     var calls: [String: J] = [:]
     var labels: [String: String] = [:]
-    let linking = (scenario["capabilities"]?.array ?? []).contains { $0.string == "identity-link" }
+    let declared = (scenario["capabilities"]?.array ?? []).compactMap(\.string)
+    let linking = declared.contains("identity-link")
+    func needs(_ capability: String, _ what: String) throws { try require(declared.contains(capability), "\(what) must require \(capability)") }
+    // Token refs: one definition each, from a scripted provider outcome or an emit.
+    var refs = Set<String>()
+    func define(_ ref: String?) throws {
+        guard let ref else { return }
+        try require(refs.insert(ref).inserted, "Duplicate token ref \(ref)")
+    }
+    if let identity = scenario["config"]?["identity"] {
+        try needs("identity-token", "config.identity")
+        for outcome in identity["provider"]?.array ?? [] where outcome["result"]?.string == "token" { try define(outcome["ref"]?.string) }
+    }
+    if scenario["server"]?["identity"] != nil { try needs("identity-token", "server.identity") }
+    if scenario["config"]?["appId"] != nil { try needs("app-id", "config.appId") }
+    for step in scenario["steps"]?.array ?? [] where step["op"]?.string == "emit" {
+        guard let spec = step["identityToken"] else { continue }
+        try needs("identity-token", "emit identityToken")
+        try require(step["method"]?.string == "identify" && step["data"]?["userId"]?.string != nil,
+                    "identityToken belongs on an identify with a userId")
+        try define(spec["ref"]?.string)
+    }
     for step in scenario["steps"]?.array ?? [] {
         let op = step["op"]?.string ?? ""
         if op == "anonymousId" { try require(linking, "anonymousId step must require identity-link") }
@@ -107,7 +135,13 @@ func validateReferences(_ scenario: J) throws {
         }
         guard let expect = step["expect"] else { continue }
         let requests = expect["requests"]?.array ?? []
+        if expect["providerCalls"] != nil { try needs("identity-token", "expect.providerCalls") }
+        if expect["notices"] != nil { try needs("identity-token", "expect.notices") }
         for request in requests {
+            for ref in request["identityTokens"]?.array?.compactMap(\.string) ?? [] {
+                try needs("identity-token", "identityTokens")
+                try require(refs.contains(ref), "Unknown token ref \(ref)")
+            }
             for item in request["batch"]?.array ?? [] {
                 guard let data = calls[item["call"]?.string ?? ""] else { throw CheckFailure("Unknown item call") }
                 if item["anonymousIdRef"] != nil {

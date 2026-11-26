@@ -21,6 +21,9 @@ final class RunnerValidationTests: XCTestCase {
         try validateEnvelope(["batch": []])
         XCTAssertThrowsError(try validateEnvelope(["batch": [], "context": ["library": "wrong"]]))
         XCTAssertThrowsError(try validateEnvelope(["batch": [], "unexpected": true]))
+        try validateEnvelope(["batch": [], "identityTokens": ["a.b.c"]])
+        XCTAssertThrowsError(try validateEnvelope(["batch": [], "identityTokens": []]), "An empty list is omitted instead")
+        XCTAssertThrowsError(try validateEnvelope(["batch": [], "identityTokens": [1]]))
         XCTAssertThrowsError(try validateEnvelope(["batch": [:]]))
         XCTAssertThrowsError(try validateEnvelope(nil))
     }

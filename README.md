@@ -41,7 +41,7 @@ Create one instance and keep it for the app's lifetime. Calls return once the ev
 
 | Method | What it does |
 | --- | --- |
-| `identify(userId:traits:)` | Signs a customer in and stores their traits. |
+| `identify(userId:identityToken:traits:)` | Signs a customer in, stores their traits, and hands over their identity token (see Verified identity). |
 | `track(event:properties:)` | Records something the customer did. |
 | `page(name:properties:)`, `screen(name:properties:)` | Records a viewed page or screen. |
 | `flush()` | Sends queued events now and returns when they are delivered. Throws the failure that ended delivery. |
@@ -55,6 +55,29 @@ Each event method also takes optional `userId`, `anonymousId`, `messageId`, `tim
 ## Identity
 
 Until `identify` is called, events carry a stored anonymous ID. `identify(userId:)` sends both IDs, so Tranthor can attribute earlier anonymous events to the customer. Later events carry only the `userId`. If a different user identifies on the same device, the anonymous ID is replaced first, so the new user does not inherit the previous user's history. An empty `userId` is ignored.
+
+## Verified identity
+
+Tranthor can refuse events from an app that cannot prove who its customer is. The workspace owner chooses the mode: **Off** accepts everything, **Monitor** accepts everything and counts events without a valid token, **Required** rejects events for a user ID that has no valid token. A token is a JWT that *your own backend* signs for one user ID; the SDK never holds a secret and never verifies a token.
+
+```swift
+let sdk = try await TranthorSDK.configure(Configuration(
+    writeKey: "<your write key>",
+    identityTokenProvider: { userId in try await MyBackend.identityToken(for: userId) }))   // String?, nil for none
+
+try await sdk.identify(userId: "u_42", identityToken: tokenFromSignIn)   // optional: the provider can supply it instead
+```
+
+- **Where the token goes.** `identify(userId:identityToken:)` keeps the token for that user. Tokens are sent in the request body beside the events (one per user in the request), never inside an event, and a token is only ever sent for its own user.
+- **Renewal.** Before a request that holds the current user's events, a token with less than 60 seconds left (or none) is renewed through `identityTokenProvider`. The provider is given 20 seconds. Whatever it does, the request is then sent with the tokens the SDK has: the server decides. A provider that throws or returns `nil` never delays delivery; one that hangs delays a request by at most the timeout, once, and is then not called for 60 seconds. A token keeps being sent for a short time after it has expired, so a signed-out user's queued events still go out.
+- **When the server refuses a token**, the SDK renews through the provider and sends the same batch again, once. A previous user's events (someone who signed out) are removed and reported through `onError` with status 403; the current user's events are never dropped. If no token can be had, or the new one is refused too, the batch stays on the device, in order, and is tried again after 60 seconds (or at once by `flush()`). Each such attempt calls `onNotice` with kind `identity-refused` and the server's `reason`. The reasons `lifetime`, `malformed`, `audience`, `workspace`, `unknown_key` and `signature` mean the code that signs your tokens is wrong; renewing cannot fix them (the list of reasons is open). A refused write key is a configuration error: that batch is dropped and reported as before. A push `Installation Removed` (sign-out or opt-out) is the exception: it is never dropped for lack of a token, because the phone would keep receiving push. The provider is asked for that user's token once; if that does not help, the removal stays queued, is reported through `onNotice` on each failed attempt (it carries no push token), not through `onError` because nothing was given up, and is tried again after 60 seconds and at the next launch, until it is delivered or the same user signs in again, which registers the phone anew.
+- **When the server cannot read its identity settings**, the batch is kept and tried again after the delay the server asks for (30 seconds if it names none, at most 5 minutes), without using up retries. This holds for every app, whether or not it uses identity tokens, because it is a server outage and never a reason to drop events. `onNotice` gets `identity-unavailable`.
+- **Other users are not stuck behind a held batch, within limits.** When a batch is held for the current user's token, the events of other users and anonymous events *in that batch* are sent first. Events queued *behind* the held batch wait for it, because the queue keeps its order: they are sent when the hold ends (after 60 seconds, or at once on `flush()`, on a new token for the user, or when a different user identifies), and while a batch is held the queue keeps at most 1,000 events: the oldest are dropped and reported through `onError` with `attempts` 0.
+- **Request size.** While identity tokens are in use (a provider is configured or a token is cached) a request carries events for at most ten users.
+- **Storage.** Tokens are saved in the state file, next to the queue, with the same file protection (`completeUntilFirstUserAuthentication`) and excluded from backups. They are not in the Keychain, so a reinstall never brings an old token back. A token is dropped once its user is no longer current and has nothing queued (opting out also ends the current user), or once it has expired by more than a short grace; this is checked at start too. `reset()` keeps the outgoing user's token until their queued events, such as the push `Installation Removed`, are sent. A token is never logged and never appears in an event, an error or a notice.
+- **Anonymous events in Required.** In Required the server can drop events from a customer who is not signed in, without an error. The SDK calls `onNotice` with `events-dropped` and the count of events the server dropped (`events-unverified` in Monitor). **In Required, identify the customer, with a token, before you register push or send traits.** See [docs/push.md](docs/push.md).
+- **App ID and `aud`.** Every request carries `x-tranthor-app-id`: the app's bundle identifier, or `appId` from the configuration. A write key restricted to certain apps needs it. The `aud` claim of a token is optional; if your backend sets it, it must equal that app ID, otherwise the server answers with the reason `audience`.
+- **No provider.** An app that never configures `identityTokenProvider` and never passes an `identityToken` to `identify` behaves as before: a refused batch is reported to `onError` and dropped, and a request is not limited to ten users. Once a token has been passed, identity stays in use for good (the SDK remembers it), even after a refusal has emptied the token cache.
 
 ## Consent
 
@@ -77,12 +100,15 @@ Only `writeKey` is required. A numeric option that is not usable never stops the
 | `storageDirectory` | Application Support | Where state is stored. |
 | `maxQueueSize` | 10,000 | Events kept; beyond it the oldest are dropped. Zero or less uses the default. |
 | `onError` | none | Called with a `BatchFailure` (events, HTTP status, attempts) when the server rejects a batch or events are dropped. Running out of retries is not reported: those events are kept. Push tokens are redacted. |
+| `identityTokenProvider` | none | `(String) async throws -> String?`: a fresh identity token for a user ID, or `nil`. See Verified identity. |
+| `appId` | bundle identifier | Sent as `x-tranthor-app-id` on every request. An empty value uses the default. An SDK created inside an app extension sends the extension's bundle identifier unless you set `appId` to the app's. |
+| `onNotice` | none | Called with a `Notice` for what is not an error: events the server dropped or could not verify, a refused token, unreadable identity settings. Carries no token or user ID. |
 
 A second instance with the same namespace and directory throws `TranthorError.namespaceInUse`. If the disk cannot be read or written, `configure` throws `TranthorError.storeTemporarilyUnavailable`; try again later.
 
 ## Delivery
 
-Events are sent as `POST /api/public/apps/batch`, one request at a time. A 2xx response is success. Network errors and the statuses 408, 425, 429 and 5xx are retried with doubling delays (or the server's `Retry-After`, honoured up to 30 seconds); any other status fails the batch at once. Redirects are refused. Each event gets a `messageId` and a UTC timestamp when it is queued, and keeps them across retries and relaunches.
+Events are sent as `POST /api/public/apps/batch`, one request at a time. A 2xx response is success. Network errors and the statuses 408, 425, 429 and 5xx are retried with doubling delays (or the server's `Retry-After`, honoured up to 30 seconds); any other status fails the batch at once, except the two identity answers described under Verified identity, which keep the batch on the device. Redirects are refused. Each event gets a `messageId` and a UTC timestamp when it is queued, and keeps them across retries and relaunches.
 
 A batch whose retries run out is not discarded. It stays at the head of the queue with its original `messageId`s and timestamps, and `onError` is not called; an explicit `flush()` still throws the failure. Automatic delivery then pauses for 30 seconds, and for twice as long after each further failed cycle (60 s, 120 s, 240 s, then 5 minutes at most). During the pause the interval timer, new events and a full batch do not start an attempt. `flush()` and the app returning from the background attempt at once, a delivered batch resets the pause to 30 seconds, and a restarted app starts without a pause: its first attempt comes at the normal flush interval. Events are discarded only when the server rejects the batch with another status, on `optOut()`, or when the queue is full (the oldest go first and are reported with `attempts` 0).
 
@@ -90,7 +116,7 @@ When the app goes to the background, queued events are sent in a background task
 
 ## Push notifications
 
-`TranthorPush` and `TranthorPushService` are optional. See [docs/push.md](docs/push.md).
+`TranthorPush` and `TranthorPushService` are optional. See [docs/push.md](docs/push.md). If your workspace requires verified identity, register push only after the customer has signed in and been identified.
 
 ## Current limits
 

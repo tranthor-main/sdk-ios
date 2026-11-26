@@ -1,0 +1,97 @@
+{
+  "id": "identity-token-503-unavailable-is-held-not-dropped",
+  "description": "A 503 identity_settings_unavailable or identity_secrets_unavailable is never a drop: the batch is kept and sent again after Retry-After, even with no retries left.",
+  "capabilities": [
+    "core",
+    "transport",
+    "identity-token"
+  ],
+  "config": {
+    "writeKey": "Basic MDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAwOmNvbmZvcm1hbmNl",
+    "flushIntervalMs": 50,
+    "retries": 0
+  },
+  "server": {
+    "responses": [
+      {
+        "status": 503,
+        "retryAfter": "1",
+        "body": {
+          "code": "identity_settings_unavailable",
+          "message": "Identity settings are unavailable."
+        }
+      },
+      {
+        "status": 503,
+        "retryAfter": "1",
+        "body": {
+          "code": "identity_secrets_unavailable",
+          "message": "Identity secrets are unavailable."
+        }
+      }
+    ]
+  },
+  "steps": [
+    {
+      "op": "emit",
+      "call": "a",
+      "method": "track",
+      "data": {
+        "anonymousId": "anonymous-1",
+        "event": "event-a"
+      }
+    },
+    {
+      "op": "assert",
+      "expect": {
+        "errors": [],
+        "requests": [
+          {
+            "batch": [
+              {
+                "call": "a"
+              }
+            ]
+          },
+          {
+            "batch": [
+              {
+                "call": "a"
+              }
+            ]
+          },
+          {
+            "batch": [
+              {
+                "call": "a"
+              }
+            ]
+          }
+        ],
+        "delays": [
+          {
+            "from": 0,
+            "to": 1,
+            "minMs": 950,
+            "maxMs": 2500
+          },
+          {
+            "from": 1,
+            "to": 2,
+            "minMs": 950,
+            "maxMs": 2500
+          }
+        ],
+        "notices": [
+          {
+            "kind": "identity-unavailable"
+          },
+          {
+            "kind": "identity-unavailable"
+          }
+        ]
+      },
+      "timeoutMs": 6000
+    }
+  ]
+}

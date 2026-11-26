@@ -19,10 +19,15 @@ struct StoredState: Codable, Sendable {
     var installation: StoredInstallation?
     /// `Installation Removed` events an opt-out still has to deliver. Delivered even while opted out.
     var pendingRemovals: [[String: JSONValue]] = []
+    /// The identity tokens of the users with events here, written with the state and so protected like the queue. Not the
+    /// Keychain: a reinstall must not bring an old token back.
+    var identityTokens = IdentityTokenCache()
+    /// An identity token has been handed over through `identify`. Never cleared: it decides whether a refusal holds a batch.
+    var identityTokenSupplied = false
 
     init() {}
 
-    private enum CodingKeys: String, CodingKey { case version, anonymousId, userId, optedOut, installation, pendingRemovals }
+    private enum CodingKeys: String, CodingKey { case version, anonymousId, userId, optedOut, installation, pendingRemovals, identityTokens, identityTokenSupplied }
     init(from decoder: any Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         let version = try values.decode(Int.self, forKey: .version)
@@ -39,6 +44,9 @@ struct StoredState: Codable, Sendable {
         // Damage to these optional fields must not cost the identity or the queue.
         installation = try? values.decodeIfPresent(StoredInstallation.self, forKey: .installation)
         pendingRemovals = (try? values.decodeIfPresent([[String: JSONValue]].self, forKey: .pendingRemovals)) ?? []
+        // A state written before identity tokens, or a damaged cache, starts with an empty one. The provider refills it.
+        identityTokens = (try? values.decodeIfPresent(IdentityTokenCache.self, forKey: .identityTokens)) ?? IdentityTokenCache()
+        identityTokenSupplied = (try? values.decodeIfPresent(Bool.self, forKey: .identityTokenSupplied)) ?? false
     }
 }
 

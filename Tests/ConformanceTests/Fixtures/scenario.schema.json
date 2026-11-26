@@ -23,7 +23,9 @@
           "lifecycle",
           "consent",
           "identity-link",
-          "durable-queue"
+          "durable-queue",
+          "identity-token",
+          "app-id"
         ]
       },
       "minItems": 1,
@@ -40,6 +42,21 @@
           "items": {
             "$ref": "#/definitions/response"
           }
+        },
+        "identity": {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "enum": [
+                "monitor",
+                "required"
+              ]
+            }
+          },
+          "required": [
+            "mode"
+          ],
+          "additionalProperties": false
         }
       },
       "required": [
@@ -76,7 +93,9 @@
           "lifecycle",
           "consent",
           "identity-link",
-          "durable-queue"
+          "durable-queue",
+          "identity-token",
+          "app-id"
         ]
       },
       "minItems": 1,
@@ -177,6 +196,9 @@
         "location": {
           "type": "string",
           "pattern": "^[\\x20-\\x7e]*$(?![\\s\\S])"
+        },
+        "body": {
+          "type": "object"
         }
       },
       "required": [],
@@ -244,6 +266,13 @@
         },
         "context": {
           "type": "object"
+        },
+        "identityTokens": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+          }
         }
       },
       "required": [
@@ -373,6 +402,19 @@
               }
             ]
           }
+        },
+        "providerCalls": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "notices": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/notice"
+          }
         }
       },
       "required": [
@@ -403,6 +445,9 @@
             },
             "data": {
               "$ref": "#/definitions/data"
+            },
+            "identityToken": {
+              "$ref": "#/definitions/tokenSpec"
             }
           },
           "required": [
@@ -558,10 +603,168 @@
         "hostSuffix": {
           "type": "string",
           "pattern": "^/*$"
+        },
+        "appId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "identity": {
+          "type": "object",
+          "properties": {
+            "provider": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/providerOutcome"
+              }
+            },
+            "providerTimeoutMs": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "providerBackoffMs": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
         }
       },
       "required": [
         "writeKey"
+      ],
+      "additionalProperties": false
+    },
+    "tokenSpec": {
+      "type": "object",
+      "properties": {
+        "ref": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+        },
+        "sub": {
+          "type": "string",
+          "minLength": 1
+        },
+        "ttlSeconds": {
+          "type": "integer",
+          "minimum": -86400,
+          "maximum": 604800
+        },
+        "valid": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "ref",
+        "sub",
+        "ttlSeconds"
+      ],
+      "additionalProperties": false
+    },
+    "providerOutcome": {
+      "type": "object",
+      "properties": {
+        "result": {
+          "enum": [
+            "token",
+            "null",
+            "error",
+            "hang"
+          ]
+        },
+        "ref": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+        },
+        "sub": {
+          "type": "string",
+          "minLength": 1
+        },
+        "ttlSeconds": {
+          "type": "integer",
+          "minimum": -86400,
+          "maximum": 604800
+        },
+        "valid": {
+          "type": "boolean"
+        },
+        "delayMs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 30000
+        }
+      },
+      "required": [
+        "result"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "result": {
+                "const": "token"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "ref",
+              "sub",
+              "ttlSeconds"
+            ]
+          },
+          "else": {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "ref"
+                  ]
+                },
+                {
+                  "required": [
+                    "sub"
+                  ]
+                },
+                {
+                  "required": [
+                    "ttlSeconds"
+                  ]
+                },
+                {
+                  "required": [
+                    "valid"
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "notice": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "enum": [
+            "events-dropped",
+            "events-unverified",
+            "identity-refused",
+            "identity-unavailable"
+          ]
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "kind"
       ],
       "additionalProperties": false
     }

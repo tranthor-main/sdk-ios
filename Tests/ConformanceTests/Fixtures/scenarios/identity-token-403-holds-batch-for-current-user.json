@@ -1,0 +1,88 @@
+{
+  "id": "identity-token-403-holds-batch-for-current-user",
+  "description": "When no token can be had for the current user a 403 does not drop the batch: it stays at the head and is sent again after the hold with the token the provider then supplies.",
+  "capabilities": [
+    "core",
+    "transport",
+    "identity-token"
+  ],
+  "config": {
+    "writeKey": "Basic MDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAwOmNvbmZvcm1hbmNl",
+    "flushIntervalMs": 50,
+    "identity": {
+      "providerBackoffMs": 1000,
+      "provider": [
+        {
+          "result": "null"
+        },
+        {
+          "result": "token",
+          "ref": "t1",
+          "sub": "user-1",
+          "ttlSeconds": 3600
+        }
+      ]
+    }
+  },
+  "server": {
+    "responses": [],
+    "identity": {
+      "mode": "required"
+    }
+  },
+  "steps": [
+    {
+      "op": "emit",
+      "call": "a",
+      "method": "identify",
+      "data": {
+        "userId": "user-1"
+      }
+    },
+    {
+      "op": "assert",
+      "expect": {
+        "errors": [],
+        "requests": [
+          {
+            "batch": [
+              {
+                "call": "a"
+              }
+            ],
+            "identityTokens": []
+          },
+          {
+            "batch": [
+              {
+                "call": "a"
+              }
+            ],
+            "identityTokens": [
+              "t1"
+            ]
+          }
+        ],
+        "providerCalls": [
+          "user-1",
+          "user-1"
+        ],
+        "delays": [
+          {
+            "from": 0,
+            "to": 1,
+            "minMs": 950,
+            "maxMs": 2500
+          }
+        ],
+        "notices": [
+          {
+            "kind": "identity-refused",
+            "reason": "missing"
+          }
+        ]
+      },
+      "timeoutMs": 5000
+    }
+  ]
+}

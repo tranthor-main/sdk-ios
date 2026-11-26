@@ -1,0 +1,81 @@
+{
+  "id": "identity-token-removal-refused-twice-stays-queued",
+  "description": "An Installation Removed that is refused and cannot be renewed is never dropped or reported as dropped: it stays queued and is sent again on each hold, with a notice per failed attempt.",
+  "capabilities": [
+    "core",
+    "transport",
+    "identity-token"
+  ],
+  "config": {
+    "writeKey": "Basic MDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAwOmNvbmZvcm1hbmNl",
+    "flushIntervalMs": 50,
+    "identity": {
+      "providerBackoffMs": 500,
+      "provider": []
+    }
+  },
+  "server": {
+    "responses": [],
+    "identity": {
+      "mode": "required"
+    }
+  },
+  "steps": [
+    {
+      "op": "emit",
+      "call": "a",
+      "method": "track",
+      "data": {
+        "userId": "user-1",
+        "event": "Installation Removed",
+        "properties": {
+          "pushToken": "redacted-fixture"
+        }
+      }
+    },
+    {
+      "op": "assert",
+      "timeoutMs": 5000,
+      "expect": {
+        "requests": [
+          {
+            "batch": [
+              {
+                "call": "a"
+              }
+            ]
+          },
+          {
+            "batch": [
+              {
+                "call": "a"
+              }
+            ]
+          },
+          {
+            "batch": [
+              {
+                "call": "a"
+              }
+            ]
+          }
+        ],
+        "errors": [],
+        "notices": [
+          {
+            "kind": "identity-refused",
+            "reason": "missing"
+          },
+          {
+            "kind": "identity-refused",
+            "reason": "missing"
+          },
+          {
+            "kind": "identity-refused",
+            "reason": "missing"
+          }
+        ]
+      }
+    }
+  ]
+}

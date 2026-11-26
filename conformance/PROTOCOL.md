@@ -60,7 +60,7 @@ or failed callback). This is what `rejected` means. Empty flush succeeds without
 a request. Scenarios may flush during an in-flight cycle, including retry backoff.
 
 Retry network failures without a usable HTTP status, 408, 425, 429, and 500–599.
-Other statuses are terminal, including 400, 401, and 403. The reference transport
+Other statuses are terminal, including 400, 401, and 403 (two identity-token answers are held instead; see [Identity tokens](#identity-tokens-identity-token)). The reference transport
 treats any 2xx as success. A 3xx MUST be a non-retryable HTTP failure and
 MUST NOT be followed. For URLSession, use a default or ephemeral session with the
 redirect delegate `urlSession(_:task:willPerformHTTPRedirection:newRequest:completionHandler:)`
@@ -146,7 +146,7 @@ All scripted header values MUST match `^[\x20-\x7e]*$`.
 
 | Step | Adapter/runner action |
 | --- | --- |
-| `emit` | Call the named SDK `method` with `data`; record local wall-clock before/after invoking the method using the unique `call` label. Do not await transport here. |
+| `emit` | Call the named SDK `method` with `data`; an optional `identityToken` `{ref, sub, ttlSeconds, valid?}` is minted first (see [Identity tokens in scenarios](#identity-tokens-in-scenarios)) and handed to `identify` beside `data`; record local wall-clock before/after invoking the method using the unique `call` label. Do not await transport here. |
 | `wait` | Wait `ms` using real timers. |
 | `flush` | Await SDK flush; capture its failure without terminating the scenario. If `rejected` is present, assert the result matches. A flush that does not settle within 5 seconds FAILS the scenario, even if rejected is omitted. |
 | `assert` | Poll requests/callbacks for up to timeoutMs (default 3000), then observe for observeMs (default 100), take a fresh snapshot and verify expect. Never flush just to make an assertion pass. |
@@ -263,6 +263,32 @@ Runner expectation semantics:
 | Summary `knownFailures` | List of scenario IDs (strings), not declaration objects. |
 | Summary `lifecycleSource` | `"os-hook"` or `"public-method"` when declared; null when absent. |
 
+### Identity tokens in scenarios
+
+Scenarios use these additions, all requiring `identity-token` (except `config.appId`, which requires `app-id`).
+A JWT in a JSON file would expire, so tokens are minted by the mock server at run time and named by `ref`.
+
+- `server.identity.mode`: `"required"` or `"monitor"`; absent means off. See the mock server section.
+- `config.identity.provider`: the scripted provider. Its presence means the adapter configures an
+  `identityTokenProvider`; it answers one entry per call, in order, and `null` once the entries are spent. An
+  entry is `{ "result": "token", "ref", "sub", "ttlSeconds", "valid"? }` (mint now and return it),
+  `{ "result": "null" }`, `{ "result": "error" }` (throw) or `{ "result": "hang" }` (never answer); `delayMs`
+  waits first. `config.identity.providerTimeoutMs` and `providerBackoffMs` scale the two timings (a hold lasts the backoff).
+- `emit.identityToken`: `{ ref, sub, ttlSeconds, valid? }`. `ttlSeconds` is relative to now: 3600 is fresh, 30
+  is inside the 60 s renewal window. `valid: false` signs with a secret the mock does not know.
+- `expect.requests[].identityTokens`: the exact list of tokens (by `ref`) in the body field; an absent field and an
+  empty list both mean none.
+- `expect.providerCalls`: the exact ordered list of user ids the provider was called with.
+- `expect.notices`: the exact ordered list of diagnostic notices (`{ kind, count?, reason? }`, each listed field
+  compared). Notices are not errors: they are not in `expect.errors`. An adapter maps its callback's notice type
+  to `{ kind, count, reason }`. Kinds: `events-dropped`, `events-unverified`, `identity-refused`, `identity-unavailable`.
+- `config.appId` and `expect.requests[].headers` check `x-tranthor-app-id`.
+
+The transport reports the two response headers to the core on a 2xx. The runner also checks, on every scenario, that no minted token appears inside any event or error report and that no
+item carries an `identityToken` key. Refs are unique within a scenario. Adapters pass the scripted provider and the
+minted token to the SDK through their own public API (the JS adapter's `createAdapter` receives
+`identityTokenProvider`, and `emit(method, data, { identityToken })`).
+
 ## Adapter contract and capabilities
 
 An adapter is an **in-process test** (XCTest, an instrumented Android or JVM
@@ -276,7 +302,8 @@ configure the real SDK, use its real queue and HTTP transport,
 collect callback results, execute the steps, and apply the expectations above.
 Do not recreate queue/retry logic in an adapter or fabricate recorded requests.
 The reference JS interface is `createAdapter({host, config})` returning
-`emit(method, data)`, `flush() -> {rejected}`, an `errors` array, and `dispose()`;
+`emit(method, data)`, `flush() -> {rejected}`, an `errors` array, and `dispose()`; an adapter that declares
+`identity-token` also exposes a `notices` array;
 mobile adapters additionally implement the named mobile steps. An adapter that
 declares `identity-link` also implements `anonymousId()`, returning the SDK's
 stored anonymousId through its public API. `dispose` cancels
@@ -319,6 +346,8 @@ capabilities so mobile checks cannot silently disappear through misdeclaration.
 | `consent` | Persistent optOut, queue/retry cancellation, and optIn collection recovery. |
 | `identity-link` | Stored identity: identify(userId) carries the stored anonymousId, and a user change rotates it first (suite 1.1.0). |
 | `durable-queue` | An exhausted retryable batch is kept and retried later instead of discarded (suite 1.2.0). |
+| `identity-token` | Identity tokens: the provider, the per-user token cache, tokens sent with each batch, and the 403/503 rules (suite 1.3.0). |
+| `app-id` | The configured `appId` is sent as `x-tranthor-app-id` on every ingestion request (suite 1.3.0). |
 
 Storage medium is an implementation choice; retention and retry recovery follow
 the normative restart rules above. Process-death testing remains out of scope.
@@ -363,6 +392,136 @@ that does not require `identity-link`. It MUST also reject an `anonymousIdRef` o
 a call whose input supplies an `anonymousId`, because the original-data check
 already covers that value.
 
+## Identity tokens (`identity-token`)
+
+Added in suite 1.3.0 and corrected in 1.4.0. An **identity token** is an HS256 JWT that the
+customer's own backend signs for one user id (`sub`). It proves to Tranthor that an SDK event really comes from
+that user. The server checks it; the SDK holds no secret and MUST NOT verify a token. It reads `exp` only to
+schedule a renewal and to stop attaching a token the server would refuse anyway, never to trust it. A token is
+never logged, never stored inside an event, never put in an error report or notice, and never attached for a user
+id other than its own.
+
+### Configuration and API
+
+- `identityTokenProvider`: an optional function `userId -> token or nothing`, asynchronous where the platform
+  allows. Returning nothing (null) means "no token for this user".
+- `identify` accepts an optional `identityToken` for its `userId`. The SDK stores it in the token cache and sends it
+  beside the events, never inside the identify event. In the scenarios it is passed by the adapter, not in `data`.
+- `appId` (capability `app-id`): sent by the **transport** as the header `x-tranthor-app-id` on every request. A
+  core that only passes it through (the JavaScript core) does not send it. Mobile SDKs default it to the bundle id
+  or package name; web SDKs do not send it (browsers are matched by `Origin`).
+- Test knobs: `identityProviderTimeoutMs` (default 20000) and `identityProviderBackoffMs` (default 60000). An
+  adapter MUST expose them so scenarios run in real time with scaled values. The defaults are **verified by the
+  implementation's own tests with a controlled clock, not by a scenario**, like the durable-queue pause lengths.
+  There is no separate hold setting: a hold for a missing token lasts the provider backoff.
+
+### Token cache
+
+A map `userId -> { token, exp }` held in memory. `exp` is read by decoding the JWT payload without verifying it;
+a token whose `exp` cannot be read is kept and attached until the server refuses it. An entry is kept while its
+user is the **current user** or still has events queued or in flight, and is removed after that. The current user
+is the user of the last `identify`; before any identify, the first user seen on an event. A logout API ends the
+current user, and the outgoing user's token stays until their queued events have been sent. Web SDKs keep the cache
+in memory only; native SDKs persist it only with the same protection as their queue, never in a shared keychain
+that survives reinstall.
+
+### Sending a batch
+
+1. For each distinct `userId` in the batch, attach that user's cached token until `exp` + 120 s: the server accepts
+   a token that long after `exp`, so a signed-out user's queued events are not dropped needlessly. Tokens go in the
+   body as `identityTokens: [..]`, one per user, in the order the users first appear in the batch. The field is
+   omitted when there is no token.
+2. If the current user is in the batch and has no token with at least 60 s left (a token renews ahead of time),
+   call the provider and wait at most 20 s. Whatever happens, then send the batch with the tokens it has: the
+   server decides.
+3. **A broken provider never delays delivery** means exactly this: a provider that throws or returns nothing never
+   delays a send; a provider that hangs delays a send by at most the 20 s timeout, once, and is then not called
+   again for 60 s. **Provider failure** (an error, a timeout or no token) starts that 60 s backoff.
+4. **At most 10 users per request, when identity is in use.** The server considers at most 10 tokens per request.
+   When a provider is configured or any token is cached, a batch takes the longest prefix of the queue that holds
+   at most 10 distinct `userId` values (and at most the batch size); the next batch takes the following events, in
+   queue order. An SDK that never uses identity tokens keeps its batching exactly as before.
+
+### What the server does with anonymous events, and what the SDK must surface
+
+In `required` mode the server answers 204 to a request, but it **silently drops** the anonymous events (no `userId`)
+that could change a customer: an anonymous `identify` (traits), `Installation Registered`, `Installation Removed`,
+`TRSubscriptionChange`, `DFSubscriptionChange`, and the push claims `Push Received`, `Push Opened` and
+`Push Dismissed`. Other anonymous events (`track`, `page`, `screen`) are stored. There is no error, so an app that
+registers its installation or push token before sign-in loses that event unnoticed. The server counts the dropped
+events in the response header `x-tranthor-dropped-events`. That count is not only these anonymous drops: the server
+also adds events it dropped for being oversized (over 64 KB), **in every mode**. The notice wording MUST therefore be
+neutral: "The server dropped N events" (optionally: "in Required mode this includes anonymous events that could
+change a customer"), never "N anonymous events"; in `monitor` mode it sets `x-tranthor-unverified-events`
+for events that would fail.
+
+The SDK MUST read both headers on a 2xx response (the transport hands the counts to the core) and, when a count is
+not zero, report one **notice** per response through its error or diagnostic callback, with no token and no user
+id in the message. A notice has no events and has a `kind`: `events-dropped` or `events-unverified`, with the
+`count`. The docs of every SDK MUST say: in Required, register push (and send the identify that carries traits) after sign-in.
+
+### Token audience
+
+`aud` is optional in a token. The server refuses a token whose `aud` is present and not equal to the app id the
+request sends in `x-tranthor-app-id` (for a browser, the `Origin`), with `reason: audience`. Every SDK's docs MUST
+tell the developer: if your backend sets `aud`, it must equal the app id (bundle id, package name, or the `appId`
+you configured); otherwise the server answers `reason: audience`. The SDK cannot fix this (see the unfixable reasons).
+
+### Server answers
+
+| Answer | Rule |
+| --- | --- |
+| `403` with `code: "identity_not_verified"` (body `{ message, code, reason?, userIds? }`) | Key off `code` and `userIds` only. `reason` is for the developer: today `missing`, `malformed`, `unknown_key`, `signature`, `expired`, `not_yet_valid`, `lifetime`, `audience` or `workspace`. Treat the list as open. See the rules below. |
+| `403` with `code` `write_key_origin_not_allowed` or `write_key_app_not_allowed`, or no code | Terminal, as before: the batch is dropped and reported. It is a configuration error. |
+| `503` with `code` `identity_settings_unavailable` or `identity_secrets_unavailable` (and `Retry-After: 30`) | Never a drop and not counted against the retry budget: **hold** the batch for `Retry-After` (30 s when absent, at least 1 s, at most 5 minutes; a longer value is capped, not clamped to 30 s) and report an `identity-unavailable` notice. |
+
+**Identity in use.** Identity is in use when a token provider is configured OR an identity token has ever been
+supplied through `identify` in this install: remembered durably where the SDK persists state, in memory only for the
+web. It does NOT depend on the token cache being non-empty at that moment, because a refusal deletes the cached
+token. The rules below apply to a `403 identity_not_verified` only when identity is in use. When it has **never**
+been in use, the old rule holds: the 403 is terminal, reported through the error callback and the batch dropped.
+A `503 identity_settings_unavailable` / `identity_secrets_unavailable` is held for every app, in use or not: it is a
+server outage and never a reason to drop.
+
+**On `403 identity_not_verified` (identity in use):**
+
+1. Remove the cache entries for the listed `userIds` (all users in the batch when none are listed).
+2. Remove the items of every listed user who is **not** the current user, report them through the error callback
+   once (status 403, message `identity not verified`, `attempts` the number of requests that carried them) and send
+   the rest.
+3. If the current user is listed, renew through the provider (unless it is in its 60 s backoff) and send again,
+   **once**. A refusal that renewing cannot fix MUST NOT loop: if the token just obtained from the provider for a
+   user in this send (before the send or after the first refusal) is refused again, stop renewing for this send,
+   report an `identity-refused` notice with the server's `reason`, then hold. The reasons `lifetime`, `malformed`,
+   `audience`, `workspace`, `unknown_key` and `signature` cannot be fixed by the SDK; the notice message says so
+   (the developer's signing code is wrong, not the SDK).
+4. If no token can be had, **hold** the batch and report an `identity-refused` notice (with the server's `reason`).
+   The items of the held batch that belong to other users (and anonymous items) are sent separately first, in one
+   request, so one user's missing token does not keep their events back. Events queued behind the held batch still
+   wait for it; that limit is deliberate.
+5. A `403 identity_not_verified` for a batch with no `userId` to act on (anonymous events only: nothing to renew,
+   drop or hold) MUST NOT be sent again in a tight loop. Treat it as a failed send: report an `identity-refused`
+   notice and apply the queue's normal retry backoff and budget.
+
+**An `Installation Removed` is never dropped for lack of a valid token** (opt-out or sign-out removal). In Required the
+server refuses an unverified removal with a 403, and dropping it would leave the phone registered and receiving push
+after the person opted out. If it is refused and one renewal does not fix it, keep it parked, retry it on the same
+hold timer as other holds (60 s) and on the next launch, and report each failed attempt through the error callback
+(the push token redacted). It stays until it is delivered or until the app signs the same user in again (the
+registration then supersedes it). This applies to the previous-user rule too: a removal is not removed from a batch as
+"a previous user's item". The JavaScript core sends no removals and has no special code for them; the scenario
+`identity-token-removal-refused-twice-stays-queued` shows the hold behaviour a removal relies on.
+
+**Hold.** The batch stays at the head of the queue with its original events, order and stamps. Automatic delivery
+pauses: the interval timer, a new event and a full batch do not start an attempt. A hold for a missing token
+retries after the provider backoff (60 s), and each failed attempt reports a notice. An explicit flush ends the
+pause, tries again at once, and reports failure. The queue is bounded while a batch is held (the JavaScript core:
+1000 events); beyond that the oldest are dropped and reported with `attempts` 0. A timer used for a hold MUST NOT
+keep a short-lived process alive on platforms that have that concept (for Node, an `unref`'d timer).
+
+A held batch is the one place where this suite keeps a batch without `durable-queue`: only for the identity cases
+above. Any other 503, and any other 403, follows the status rules in [Ingestion and queue behavior](#ingestion-and-queue-behavior).
+
 ## Mock server and HTTP control API
 
 Node 22 or newer is used by CI and the reference runner (built-in fetch). The
@@ -384,7 +543,21 @@ suite run; concurrent runners need separate instances.
 | `POST /control/script` with `{ "responses": [...] }` | 200 `{ "ok": true }`; atomically replaces script and resets cursor, preserves records. Invalid JSON/entries return 400 without changing the script. |
 | `GET /control/time` | 200 `{ "nowMs": <Unix epoch milliseconds> }` on the server clock; never recorded as ingestion. |
 | `GET /control/requests` | 200 `{ "requests": [...] }`; arrival-ordered snapshot of ingestion requests only. |
+| `POST /control/identity` with `{ "mode": "off" \| "monitor" \| "required" }` | 200. Sets the identity mode for ingestion; reset returns it to `off`. Unknown modes return 400. |
+| `POST /control/identity/token` with `{ sub, ttlSeconds, valid? }` | 200 `{ "token": "<jwt>" }`: an HS256 JWT for `sub` with `exp` = now + `ttlSeconds` and a unique `jti`, signed with the published fixture secret (or an unknown one when `valid` is false). |
 | `POST /api/public/apps/batch` | Reads JSON, records it and consumes a script entry. Scripted empty-body status or socket drop; exhausted script returns 204. Invalid JSON/oversize body returns 400 and still consumes one entry. |
+
+Identity modes (suite 1.3.0). The mock reads the `x-tranthor-identity-token` header and the body field
+`identityTokens`, considers at most 10 tokens (header first, then the body list in order) and never answers 400 for their
+count or length. An `identityTokens` that is not an array of strings is a 400 without a code in every mode. In `required`
+mode a request with any item whose `userId` has no valid token for that user fails with `403`
+`{ message, code: "identity_not_verified", reason, userIds }` (`reason` is the first failure: `missing`, `signature`,
+`expired`, ...; `userIds` the distinct users without a valid token, at most 50). That verdict is the server's own answer:
+it does not consume a scripted response. Otherwise the next scripted response applies. In `monitor` mode nothing is rejected and
+`x-tranthor-unverified-events` counts the items that would fail. In `required` mode the mock also drops the anonymous sensitive
+events listed above with a 204 and the count in `x-tranthor-dropped-events`; an unknown or non-HS256 `alg` fails as `signature`. Scripted response entries may carry `body`, a JSON object
+sent with `Content-Type: application/json`, to script the `write_key_*` 403s and the identity 503s. The mock does not model
+audiences, `kid` or secret rotation; it is not an auth test.
 
 Control POSTs MUST have media type application/json (case-insensitive, parameters
 allowed); otherwise they return 415 without mutating state.
@@ -472,6 +645,26 @@ may import them. Concurrent jobs MUST use
 separate ports via CONFORMANCE_PORT or separate hosts.
 
 ## Suite changelog
+
+- **1.5.0**
+  - Behaviour change, replaces what each SDK did: a `403 identity_not_verified` holds the current user's batch only when identity is in use (provider configured, or a token ever supplied through `identify`); otherwise it is reported and dropped as before. A `503 identity_settings_unavailable` / `identity_secrets_unavailable` is held for every app, in use or not, because it is a server outage.
+  - An `Installation Removed` is never dropped for lack of a valid token: parked, retried on the hold timer and at next launch, each failure reported with the push token redacted. This overrides "reported and dropped" for the Android removal.
+  - Adds scenarios `identity-token-never-in-use-403-is-dropped`, `identity-token-token-supplied-once-is-held-after-refusal` and `identity-token-removal-refused-twice-stays-queued`; `identity-token-refusal-without-user-backs-off` now configures a provider so identity is in use.
+- **1.4.1**
+  - Wording only: the `x-tranthor-dropped-events` notice is neutral because the count includes oversized events in every mode; the token audience rule is documented. `identity-token-anonymous-drop-is-surfaced` has a corrected description. No schema change.
+- **1.4.0**
+  - Review fixes before native SDKs pin it. Adds the scenario field `expect.notices` and the diagnostic notice (`events-dropped`, `events-unverified`, `identity-refused`, `identity-unavailable`).
+  - The mock drops anonymous sensitive events in Required (204, `x-tranthor-dropped-events`) and gives a non-HS256 `alg` the reason `signature`.
+  - Adds scenarios `identity-token-anonymous-drop-is-surfaced`, `identity-token-monitor-unverified-is-surfaced`, `identity-token-unfixable-refusal-does-not-loop`, `identity-token-refusal-without-user-backs-off` and `identity-token-held-batch-sends-other-users`. Existing 1.3.0 identity scenarios gain notices.
+  - Removes the `holdMs` knob: a hold lasts the provider backoff. A 503 hold honours Retry-After up to 5 minutes. A cached token is attached until `exp` + 120 s. The 10-users cut applies only when identity is in use.
+  - Changed rules: see Identity tokens. Adapters declaring `identity-token` must surface response-header counts and refusals as notices.
+- **1.3.0**
+  - Adds the optional `identity-token` and `app-id` capabilities.
+  - Adds mock-server identity modes (`/control/identity`, `/control/identity/token`) and scripted response bodies.
+  - Adds the scenario fields `server.identity`, `config.identity`, `config.appId`, `emit.identityToken`, `expect.requests[].identityTokens` and `expect.providerCalls`.
+  - Adds twelve scenarios: `identity-token-matching-user-only`, `identity-token-mixed-user-batch`, `identity-token-expiring-token-renewed-before-send`, `identity-token-provider-timeout`, `identity-token-provider-backoff`, `identity-token-403-renews-and-retries`, `identity-token-403-drops-previous-user-items`, `identity-token-403-holds-batch-for-current-user`, `identity-token-write-key-403s-are-terminal`, `identity-token-503-unavailable-is-held-not-dropped`, `identity-token-ten-users-per-request` and `app-id-header`.
+  - Unlike 1.1.0 and 1.2.0 the JS reference declares both capabilities and passes them.
+  - For adapters that don't declare them, every earlier scenario keeps its meaning.
 
 - **1.2.0**
   - Adds the optional `durable-queue` capability and the scenario field `unless`.

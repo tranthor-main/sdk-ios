@@ -30,6 +30,8 @@ After the permission request returns, call `try await push.refreshPermission()`.
 
 5. **Forward notification callbacks** (below).
 
+**If your workspace requires verified identity (Required mode), register push only after sign-in.** `TranthorPush` already holds a device token until `identify` is called, so nothing is registered anonymously; keep it that way: call `identify(userId:identityToken:)` first, and do not send an anonymous registration yourself. In Required the server can drop an anonymous registration or an anonymous push interaction event without an error. The SDK reports the server's count of dropped events through `Configuration.onNotice` (kind `events-dropped`). See "Verified identity" in the [README](../README.md#verified-identity).
+
 Identity and consent belong to the SDK. `identify`, `reset`, `optOut` and `optIn` on `TranthorSDK` keep the registration in step; there is nothing to call on `TranthorPush`. `shutdown()` stops the push instance only.
 
 ## What is sent

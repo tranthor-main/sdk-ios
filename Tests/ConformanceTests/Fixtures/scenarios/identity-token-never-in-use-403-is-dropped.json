@@ -1,0 +1,57 @@
+{
+  "id": "identity-token-never-in-use-403-is-dropped",
+  "description": "An app that never configured a provider and never supplied a token through identify is not in identity use: a 403 identity_not_verified is reported and the batch dropped, as before.",
+  "capabilities": [
+    "core",
+    "transport",
+    "identity-token"
+  ],
+  "config": {
+    "writeKey": "Basic MDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAwOmNvbmZvcm1hbmNl"
+  },
+  "server": {
+    "responses": [],
+    "identity": {
+      "mode": "required"
+    }
+  },
+  "steps": [
+    {
+      "op": "emit",
+      "call": "a",
+      "method": "track",
+      "data": {
+        "userId": "user-1",
+        "event": "event-a"
+      }
+    },
+    {
+      "op": "flush",
+      "rejected": true
+    },
+    {
+      "op": "assert",
+      "expect": {
+        "requests": [
+          {
+            "batch": [
+              {
+                "call": "a"
+              }
+            ]
+          }
+        ],
+        "errors": [
+          {
+            "attempts": 1,
+            "status": 403,
+            "eventCalls": [
+              "a"
+            ]
+          }
+        ],
+        "notices": []
+      }
+    }
+  ]
+}

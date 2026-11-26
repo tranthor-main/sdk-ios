@@ -1,0 +1,73 @@
+{
+  "id": "identity-token-mixed-user-batch",
+  "description": "A batch holding two users carries one token per user, in the order of the events, and Required mode accepts it.",
+  "capabilities": [
+    "core",
+    "transport",
+    "identity-token"
+  ],
+  "config": {
+    "writeKey": "Basic MDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAwOmNvbmZvcm1hbmNl",
+    "batchSize": 2
+  },
+  "server": {
+    "responses": [],
+    "identity": {
+      "mode": "required"
+    }
+  },
+  "steps": [
+    {
+      "op": "emit",
+      "call": "a",
+      "method": "identify",
+      "data": {
+        "userId": "user-1"
+      },
+      "identityToken": {
+        "ref": "t1",
+        "sub": "user-1",
+        "ttlSeconds": 3600
+      }
+    },
+    {
+      "op": "emit",
+      "call": "b",
+      "method": "identify",
+      "data": {
+        "userId": "user-2"
+      },
+      "identityToken": {
+        "ref": "t2",
+        "sub": "user-2",
+        "ttlSeconds": 3600
+      }
+    },
+    {
+      "op": "flush",
+      "rejected": false
+    },
+    {
+      "op": "assert",
+      "expect": {
+        "errors": [],
+        "requests": [
+          {
+            "batch": [
+              {
+                "call": "a"
+              },
+              {
+                "call": "b"
+              }
+            ],
+            "identityTokens": [
+              "t1",
+              "t2"
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

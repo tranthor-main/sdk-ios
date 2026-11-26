@@ -1,0 +1,68 @@
+{
+  "id": "identity-token-expiring-token-renewed-before-send",
+  "description": "A cached token with less than 60 s left is renewed through the provider before the batch is sent.",
+  "capabilities": [
+    "core",
+    "transport",
+    "identity-token"
+  ],
+  "config": {
+    "writeKey": "Basic MDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAwOmNvbmZvcm1hbmNl",
+    "identity": {
+      "provider": [
+        {
+          "result": "token",
+          "ref": "t2",
+          "sub": "user-1",
+          "ttlSeconds": 3600
+        }
+      ]
+    }
+  },
+  "server": {
+    "responses": [],
+    "identity": {
+      "mode": "required"
+    }
+  },
+  "steps": [
+    {
+      "op": "emit",
+      "call": "a",
+      "method": "identify",
+      "data": {
+        "userId": "user-1"
+      },
+      "identityToken": {
+        "ref": "t1",
+        "sub": "user-1",
+        "ttlSeconds": 30
+      }
+    },
+    {
+      "op": "flush",
+      "rejected": false
+    },
+    {
+      "op": "assert",
+      "expect": {
+        "errors": [],
+        "requests": [
+          {
+            "batch": [
+              {
+                "call": "a"
+              }
+            ],
+            "identityTokens": [
+              "t2"
+            ]
+          }
+        ],
+        "providerCalls": [
+          "user-1"
+        ]
+      }
+    }
+  ]
+}

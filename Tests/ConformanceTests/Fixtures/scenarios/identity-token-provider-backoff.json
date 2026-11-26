@@ -1,0 +1,138 @@
+{
+  "id": "identity-token-provider-backoff",
+  "description": "After a provider failure the provider is not called again until its backoff has passed, and a failing provider never stops delivery.",
+  "capabilities": [
+    "core",
+    "transport",
+    "identity-token"
+  ],
+  "config": {
+    "writeKey": "Basic MDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAwOmNvbmZvcm1hbmNl",
+    "batchSize": 1,
+    "identity": {
+      "providerBackoffMs": 1500,
+      "provider": [
+        {
+          "result": "error"
+        },
+        {
+          "result": "token",
+          "ref": "t1",
+          "sub": "user-1",
+          "ttlSeconds": 3600
+        }
+      ]
+    }
+  },
+  "server": {
+    "responses": [],
+    "identity": {
+      "mode": "monitor"
+    }
+  },
+  "steps": [
+    {
+      "op": "emit",
+      "call": "a",
+      "method": "identify",
+      "data": {
+        "userId": "user-1"
+      }
+    },
+    {
+      "op": "emit",
+      "call": "b",
+      "method": "track",
+      "data": {
+        "userId": "user-1",
+        "event": "event-b"
+      }
+    },
+    {
+      "op": "flush",
+      "rejected": false
+    },
+    {
+      "op": "assert",
+      "expect": {
+        "errors": [],
+        "requests": [
+          {
+            "batch": [
+              {
+                "call": "a"
+              }
+            ],
+            "identityTokens": []
+          },
+          {
+            "batch": [
+              {
+                "call": "b"
+              }
+            ],
+            "identityTokens": []
+          }
+        ],
+        "providerCalls": [
+          "user-1"
+        ]
+      }
+    },
+    {
+      "op": "wait",
+      "ms": 1600
+    },
+    {
+      "op": "emit",
+      "call": "c",
+      "method": "track",
+      "data": {
+        "userId": "user-1",
+        "event": "event-c"
+      }
+    },
+    {
+      "op": "flush",
+      "rejected": false
+    },
+    {
+      "op": "assert",
+      "expect": {
+        "errors": [],
+        "requests": [
+          {
+            "batch": [
+              {
+                "call": "a"
+              }
+            ],
+            "identityTokens": []
+          },
+          {
+            "batch": [
+              {
+                "call": "b"
+              }
+            ],
+            "identityTokens": []
+          },
+          {
+            "batch": [
+              {
+                "call": "c"
+              }
+            ],
+            "identityTokens": [
+              "t1"
+            ]
+          }
+        ],
+        "providerCalls": [
+          "user-1",
+          "user-1"
+        ]
+      }
+    }
+  ]
+}

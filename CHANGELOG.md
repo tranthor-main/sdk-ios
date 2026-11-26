@@ -6,6 +6,22 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- Verified identity: `Configuration.identityTokenProvider` and `identify(userId:identityToken:)`. Identity tokens are kept with the state file, sent in the request body, renewed before they expire and after the server refuses one. A batch the server will not accept for lack of a token stays on the device and is tried again after 60 seconds, or at once on `flush()`, a new token for the user, or a different user. Events queued behind a held batch wait for it. See "Verified identity" in the README.
+- `Configuration.appId` (default: the bundle identifier), sent as `x-tranthor-app-id` on every request. An SDK created in an app extension sends the extension's bundle identifier unless `appId` is set.
+- `Configuration.onNotice` and `Notice`: events the server dropped or could not verify, a refused token, unreadable identity settings.
+- `DeliveryFailure.code`, `userIds` and `reason`, read from the server's error body.
+- The conformance suite is now 1.4.1 (the `identity-token` and `app-id` scenarios).
+
+### Changed
+
+- `identify(userId:anonymousId:traits:messageId:timestamp:context:)` gained an `identityToken:` parameter after `userId:`. Calls that use argument labels are unaffected.
+- When identity tokens are in use (a provider is configured, or a token has ever been passed to `identify`), a request carries events for at most ten users. An app that does not use identity tokens batches and handles a refused batch exactly as before.
+- With tokens in use, a batch the server refuses for lack of a valid token for the current user is held instead of dropped, and at most 1,000 events are kept while it is held.
+- A batch the server turns away because it cannot read its identity settings is now kept and sent again after the delay the server asks for, for every app, whether or not it uses identity tokens: it is a server outage, never a reason to drop events.
+- A push `Installation Removed` is never dropped for lack of a token: each failed attempt is reported through `onNotice`, not `onError`, and it is tried again until it is delivered.
+
 ### Fixed
 
 - Example app: tapping "Page" or "Screen" sent both a page and a screen event, because the two buttons share one form row. Each button now sends only its own event. The SDK itself is unchanged.

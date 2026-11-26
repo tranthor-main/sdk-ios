@@ -41,6 +41,22 @@ public actor TranthorSDK {
     var removalParked: DeliveryFailure?
     var removalTriggers: UInt64 = 0
     var sawBackground = false
+    /// Wall clock in milliseconds since the epoch. Injected so tests control it: it decides when a token is about to
+    /// expire and when the provider's backoff ends.
+    let now: @Sendable () -> Double
+    /// The first user seen on an event before anyone identified; the current user until then. In memory only.
+    var observedUser: String?
+    /// The provider is not called before this time (ms) after it failed.
+    var providerBackoffUntilMs = 0.0
+    /// How long the removals a hold parked wait before they are tried again.
+    var removalHoldMs: Double?
+    /// A batch is held, for lack of a token the server accepts or because its identity settings are unavailable:
+    /// automatic delivery waits for `holdTask`, and an explicit flush ends the wait. In memory only.
+    var held = false
+    var holdGeneration = 0
+    var holdTask: Task<Void, Never>?
+    /// How many requests have carried each event (by messageId), for the attempts reported when one is dropped.
+    var requestsPerEvent: [String: Int] = [:]
     struct Waiter {
         var continuation: CheckedContinuation<Void, any Error>
         var failure: DeliveryFailure?
@@ -60,7 +76,8 @@ public actor TranthorSDK {
          sleep: @escaping @Sendable (Double) async throws -> Void,
          storeWrite: @escaping @Sendable (Data, URL) throws -> Void = { try JSONStore.write($0, to: $1) },
          storeMove: @escaping @Sendable (URL, URL) throws -> Void = { try FileManager.default.moveItem(at: $0, to: $1) },
-         storeRemove: @escaping @Sendable (URL) throws -> Void = { try FileManager.default.removeItem(at: $0) }) async throws {
+         storeRemove: @escaping @Sendable (URL) throws -> Void = { try FileManager.default.removeItem(at: $0) },
+         now: @escaping @Sendable () -> Double = { Date().timeIntervalSince1970 * 1000 }) async throws {
         let acquired = try await NamespaceRegistry.shared.acquire(directory: configuration.storageDirectory, namespace: configuration.storageNamespace)
         let loaded: (JSONStore, StoredState, EventQueue, [[String: JSONValue]], Set<UInt64>)
         do {
@@ -95,6 +112,7 @@ public actor TranthorSDK {
         self.configuration = configuration
         self.transport = transport
         self.sleep = sleep
+        self.now = now
         lease = acquired
         store = loaded.0
         state = loaded.1
@@ -104,6 +122,9 @@ public actor TranthorSDK {
         lifecycle = await LifecycleObserver(sdk: self)
         #endif
         pendingDeletion = loaded.4
+        // Tokens left by an earlier run: keep only what the queue, the removals and the current user need, and what the
+        // server would still accept.
+        if pruneTokens() { persistDeliveryState() }
         reportDropped(loaded.3)
         armTimer()
         // An opt-out removal left undelivered by a previous run gets one cycle at app start.
@@ -115,6 +136,7 @@ public actor TranthorSDK {
         pause.end()
         cycle?.cancel()
         backoff?.cancel()
+        holdTask?.cancel()
         dropNotification?.cancel()
         transport.shutdown()
         let lease = lease
@@ -149,19 +171,32 @@ public actor TranthorSDK {
     /// Signs `userId` in and records `traits`. The event also carries the stored anonymous ID, so earlier anonymous
     /// events link to the user. A different user than the stored one gets a new anonymous ID first; an empty
     /// `userId` is ignored. An explicit `anonymousId` is sent instead and is not stored.
-    public func identify(userId: String? = nil, anonymousId: String? = nil,
+    ///
+    /// `identityToken` is the JWT your backend signed for `userId`. It is kept for that user, sent beside the events and
+    /// never inside one, and renewed through `Configuration.identityTokenProvider`. Leave it out to let the provider
+    /// supply it when the first batch is sent.
+    public func identify(userId: String? = nil, identityToken: String? = nil, anonymousId: String? = nil,
                          traits: [String: JSONValue]? = nil, messageId: String? = nil,
                          timestamp: String? = nil, context: [String: JSONValue]? = nil) throws {
         guard !state.optedOut, !stopped else { return }
         let previousUserId = state.userId
         let previousAnonymousId = state.anonymousId
+        let previousTokens = state.identityTokens, previousSupplied = state.identityTokenSupplied
         // "" is not a user: storing it would hide the previous user from the rotation check below.
         let user = userId.flatMap { $0.isEmpty ? nil : $0 }
         // Saved with the new user ID by the state write in admit(), after the event files.
         if let user, let previousUserId, !previousUserId.isEmpty, previousUserId != user {
             state.anonymousId = UUID().uuidString
         }
-        if let user { state.userId = user }
+        if let user {
+            state.userId = user
+            if let identityToken, !identityToken.isEmpty { state.identityTokens.set(identityToken, for: user); state.identityTokenSupplied = true }
+            // The previous user's token stays only while they have events waiting.
+            pruneTokens()
+        }
+        // A new token, or a new user, ends a hold: there is something new to try.
+        let endsHold = held && user != nil && ((identityToken?.isEmpty == false) || user != previousUserId)
+        if endsHold { endHold() }
         var data = payload(userId: user, anonymousId: anonymousId ?? (user != nil ? state.anonymousId : nil),
                            messageId: messageId, timestamp: timestamp, context: context)
         if let traits { data["traits"] = .object(traits) }
@@ -176,7 +211,10 @@ public actor TranthorSDK {
         do {
             try enqueue("identify", data, alongside: registration.map { [$0] } ?? [], savingState: true)
             if registration != nil { sentInstallation = fingerprint }
-        } catch { state.userId = previousUserId; state.anonymousId = previousAnonymousId; throw error }
+            // Signing the same user in again registers the phone anew, which supersedes a removal still waiting for them.
+            if let user, let registration, let target = Self.installationTarget(registration) { supersedeRemovals(target: target, user: user) }
+            if endsHold { beginCycle() }
+        } catch { state.userId = previousUserId; state.anonymousId = previousAnonymousId; state.identityTokens = previousTokens; state.identityTokenSupplied = previousSupplied; throw error }
     }
     /// Queues an event with a name and optional properties. Ignored while opted out.
     public func track(event: String, userId: String? = nil, anonymousId: String? = nil,
@@ -235,6 +273,7 @@ public actor TranthorSDK {
                 events: Self.redactingToken([item]), attempts: 0))
             throw error
         }
+        if state.userId == nil, observedUser == nil, let user = itemUser(item) { observedUser = user }
         try admit([item] + extra, savingState: savingState)
     }
     /// Appends items as event files, dropping the oldest ordinary events if the queue is over capacity. The batch in
@@ -247,7 +286,8 @@ public actor TranthorSDK {
         let added = items.map { item -> QueuedEvent in defer { next += 1 }; return QueuedEvent(sequence: next, event: item) }
         var events = queue.events + added
         var removed: [QueuedEvent] = []
-        while events.count > configuration.maxQueueSize && events.count > inFlightCount {
+        let capacity = held ? min(configuration.maxQueueSize, Self.heldQueueLimit) : configuration.maxQueueSize
+        while events.count > capacity && events.count > inFlightCount {
             removed.append(events.remove(at: inFlightCount + Self.overflowIndex(events[inFlightCount...].map(\.event))))
         }
         let dropped = Set(removed.map(\.sequence))
@@ -272,6 +312,8 @@ public actor TranthorSDK {
         pendingDeletion.formUnion(stuck)
         queue.nextSequence = max(queue.nextSequence, next)
     }
+    /// While a batch is held the queue keeps at most this many events; the oldest are dropped and reported.
+    static let heldQueueLimit = 1000
     private static func overflowIndex(_ queue: [[String: JSONValue]]) -> Int {
         if let ordinary = queue.firstIndex(where: { installationTarget($0) == nil }) { return ordinary }
         for index in queue.indices {
@@ -290,14 +332,19 @@ public actor TranthorSDK {
         // Built before the rotation, so it carries the outgoing identity.
         let removal = installation.map { installationItem("Installation Removed", $0, details: false) }
         let previous = (userId: state.userId, anonymousId: state.anonymousId, sent: sentInstallation)
+        let previousTokens = state.identityTokens, previousObserved = observedUser
         state.userId = nil
+        observedUser = nil
         state.anonymousId = UUID().uuidString
         sentInstallation = nil
+        // The outgoing user's identity token stays until their queued items, the removal included, have been sent.
+        pruneTokens(keeping: removal.flatMap { itemUser($0) }.map { [$0] } ?? [])
         do {
             // The token stays held: the next identify() registers it to that customer. Nothing is registered now.
             if let removal { try admit([removal], savingState: true) } else { try store.save(state) }
         } catch {
             (state.userId, state.anonymousId, sentInstallation) = previous
+            state.identityTokens = previousTokens; observedUser = previousObserved
             throw error
         }
     }
@@ -311,8 +358,12 @@ public actor TranthorSDK {
         state.optedOut = true
         let discarded = queue.events.map(\.sequence)
         queue.events = []
+        requestsPerEvent = [:]
+        // Only the removals an opt-out still has to deliver keep their user's token, the current user's included no longer.
+        pruneTokens(keepCurrent: false)
         dropped = []
         dropNotification?.cancel(); dropNotification = nil
+        endHold()
         cancelTimer()
         pause.reset()
         let pending = cycle
@@ -356,6 +407,8 @@ public actor TranthorSDK {
         retryPendingDeletions()
         paused = false
         pause.end()
+        // An explicit flush ends a hold and tries again at once.
+        endHold()
         if cycle == nil && queue.events.isEmpty { return }
         try await withCheckedThrowingContinuation { continuation in
             waiters.append(Waiter(continuation: continuation))
@@ -371,6 +424,7 @@ public actor TranthorSDK {
         await cleanup.value
     }
     private func completeShutdown() async {
+        endHold()
         cancelTimer()
         pause.end()
         let pending = cycle

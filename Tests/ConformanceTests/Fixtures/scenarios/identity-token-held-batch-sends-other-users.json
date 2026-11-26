@@ -1,0 +1,87 @@
+{
+  "id": "identity-token-held-batch-sends-other-users",
+  "description": "When a batch is held for the current user's missing token, the other users' events in that batch are sent separately instead of waiting behind it.",
+  "capabilities": [
+    "core",
+    "transport",
+    "identity-token"
+  ],
+  "config": {
+    "writeKey": "Basic MDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAwOmNvbmZvcm1hbmNl",
+    "batchSize": 2,
+    "identity": {
+      "providerBackoffMs": 1500,
+      "provider": []
+    }
+  },
+  "server": {
+    "responses": [],
+    "identity": {
+      "mode": "required"
+    }
+  },
+  "steps": [
+    {
+      "op": "emit",
+      "call": "a",
+      "method": "identify",
+      "data": {
+        "userId": "user-2"
+      },
+      "identityToken": {
+        "ref": "t2",
+        "sub": "user-2",
+        "ttlSeconds": 3600
+      }
+    },
+    {
+      "op": "emit",
+      "call": "b",
+      "method": "identify",
+      "data": {
+        "userId": "user-1"
+      }
+    },
+    {
+      "op": "assert",
+      "observeMs": 300,
+      "expect": {
+        "requests": [
+          {
+            "batch": [
+              {
+                "call": "a"
+              },
+              {
+                "call": "b"
+              }
+            ],
+            "identityTokens": [
+              "t2"
+            ]
+          },
+          {
+            "batch": [
+              {
+                "call": "a"
+              }
+            ],
+            "identityTokens": [
+              "t2"
+            ]
+          }
+        ],
+        "errors": [],
+        "providerCalls": [
+          "user-1"
+        ],
+        "notices": [
+          {
+            "kind": "identity-refused",
+            "reason": "missing"
+          }
+        ]
+      }
+    }
+  ]
+}

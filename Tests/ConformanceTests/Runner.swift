@@ -1,6 +1,6 @@
 import Foundation
 import XCTest
-import TranthorSDK
+@_spi(Testing) import TranthorSDK
 #if canImport(UIKit)
 import UIKit
 #endif
@@ -54,9 +54,14 @@ func emitLine(_ value: J) throws {
 func validateEnvelope(_ body: J?) throws {
     // Stricter iOS SDK invariant: production does not merge envelope context into items.
     // The language-neutral protocol permits wrappers to add context; this SDK never does.
-    try require(body?.object.map { Set($0.keys) == ["batch"] } == true,
-                "iOS SDK envelope must contain exactly batch")
+    // identityTokens (suite 1.3.0) is the one other key, and only when there is a token to carry.
+    try require(body?.object.map { Set($0.keys).subtracting(["identityTokens"]) == ["batch"] } == true,
+                "iOS SDK envelope must contain exactly batch, and identityTokens when a token is sent")
     try require(body?["batch"]?.array != nil, "iOS SDK batch must be an array")
+    if let tokens = body?["identityTokens"] {
+        try require(tokens.array.map { !$0.isEmpty && $0.allSatisfy { $0.string != nil } } == true,
+                    "iOS SDK identityTokens must be a nonempty array of strings, omitted when empty")
+    }
 }
 func requestDiagnostics(_ records: [J]) -> J {
     .array(records.map { record in
@@ -83,6 +88,7 @@ final class ScenarioRunner {
     let scenario: J
     let directory: URL
     let errors = ErrorLog()
+    let notices = NoticeLog()
     var sdk: TranthorSDK?
     var calls: [String: Call] = [:]
     var operations: [String: Operation] = [:]
@@ -90,6 +96,7 @@ final class ScenarioRunner {
     let linking: Bool
     var anonymousIdRefs: [String: String] = [:]
     var offset = 0.0
+    var identity: IdentityScript?
     let control = URLSession(configuration: .ephemeral)
     init(host: String, scenario: J, linking: Bool = false) {
         self.host = host
@@ -121,15 +128,29 @@ final class ScenarioRunner {
     func makeSDK() async throws -> TranthorSDK {
         let config = scenario["config"] ?? [:]
         let log = errors
-        return try await TranthorSDK.configure(Configuration(
+        let notices = self.notices
+        // The provider is configured when the scenario scripts one; its cursor outlives a restart.
+        var provider: (@Sendable (String) async throws -> String?)?
+        if config["identity"] != nil, let script = identity {
+            provider = { @Sendable user in try await script.provide(user) }
+        }
+        let identityConfig = config["identity"]
+        let timeoutMs = identityConfig?["providerTimeoutMs"]?.number
+        let backoffMs = identityConfig?["providerBackoffMs"]?.number
+        // caller-overrides requires exact equality of the original context object.
+        // Every other scenario exercises the production context default.
+        let context = scenario["id"]?.string != "caller-overrides"
+        var configuration = Configuration(
             writeKey: config["writeKey"]?.string ?? "",
             host: host + (config["hostSuffix"]?.string ?? ""),
             batchSize: config["batchSize"]?.number, flushIntervalMs: config["flushIntervalMs"]?.number,
             retries: config["retries"]?.number, baseDelay: config["baseDelay"]?.number,
-            // caller-overrides requires exact equality of the original context object.
-            // Every other scenario exercises the production context default.
-            automaticContext: scenario["id"]?.string != "caller-overrides", storageNamespace: "scenario", storageDirectory: directory,
-            onError: { log.append($0) }))
+            automaticContext: context, storageNamespace: "scenario", storageDirectory: directory,
+            onError: { log.append($0) }, identityTokenProvider: provider, appId: config["appId"]?.string,
+            onNotice: { notices.append($0) })
+        if let timeoutMs { configuration.identityProviderTimeoutMs = timeoutMs }
+        if let backoffMs { configuration.identityProviderBackoffMs = backoffMs }
+        return try await TranthorSDK.configure(configuration)
     }
     func run() async throws {
         do {
@@ -143,7 +164,12 @@ final class ScenarioRunner {
                 samples.append(server - (before + after) / 2)
             }
             offset = samples.sorted()[1]
-            _ = try await http("/control/script", scenario["server"])
+            // Only the responses go to the script endpoint; the identity mode has its own.
+            _ = try await http("/control/script", ["responses": scenario["server"]?["responses"] ?? []])
+            if let mode = scenario["server"]?["identity"] { _ = try await http("/control/identity", mode) }
+            if (scenario["capabilities"]?.array ?? []).contains(where: { $0.string == "identity-token" }) {
+                identity = IdentityScript(host: host, outcomes: scenario["config"]?["identity"]?["provider"]?.array ?? [])
+            }
             sdk = try await makeSDK()
             for step in scenario["steps"]?.array ?? [] { try await execute(step) }
         } catch {
@@ -160,6 +186,7 @@ final class ScenarioRunner {
     }
     func dispose() async {
         await sdk?.shutdown(); sdk = nil
+        await identity?.close(); identity = nil
         control.invalidateAndCancel()
         try? FileManager.default.removeItem(at: directory)
     }
@@ -174,8 +201,14 @@ final class ScenarioRunner {
             let user = data["userId"]?.string, anonymous = data["anonymousId"]?.string
             let id = data["messageId"]?.string, time = data["timestamp"]?.string
             let context = data["context"]?.object, properties = data["properties"]?.object
+            // The token is minted now, so its expiry counts from this call, and goes beside the data, never inside it.
+            var token: String?
+            if let spec = step["identityToken"] {
+                guard let identity else { throw CheckFailure("identityToken needs the identity-token capability") }
+                token = try await identity.mint(spec)
+            }
             switch method {
-            case "identify": try await sdk.identify(userId: user, anonymousId: anonymous, traits: data["traits"]?.object, messageId: id, timestamp: time, context: context)
+            case "identify": try await sdk.identify(userId: user, identityToken: token, anonymousId: anonymous, traits: data["traits"]?.object, messageId: id, timestamp: time, context: context)
             case "track": try await sdk.track(event: data["event"]?.string ?? "", userId: user, anonymousId: anonymous, properties: properties, files: data["files"]?.array, messageId: id, timestamp: time, context: context)
             case "page": try await sdk.page(name: data["name"]?.string, userId: user, anonymousId: anonymous, properties: properties, messageId: id, timestamp: time, context: context)
             case "screen": try await sdk.screen(name: data["name"]?.string, userId: user, anonymousId: anonymous, properties: properties, messageId: id, timestamp: time, context: context)
@@ -232,13 +265,15 @@ final class ScenarioRunner {
         while now() < deadline {
             let records = try await requests()
             let callbacks = await errors.snapshot()
-            if records.count >= expectedRequests.count && callbacks.count >= expectedErrors.count { break }
+            if records.count >= expectedRequests.count && callbacks.count >= expectedErrors.count
+                && notices.snapshot.count >= (expect["notices"]?.array?.count ?? 0) { break }
             try await wait(10)
         }
         try await wait(step["observeMs"]?.number ?? 100)
         let records = try await requests()
         let callbacks = await errors.snapshot()
         for record in records { try validateEnvelope(record["body"]) }
+        let minted = await identity?.tokens ?? [:]
         try require(records.count == expectedRequests.count, "Request count \(records.count), expected \(expectedRequests.count)")
         try require(callbacks.count == expectedErrors.count, "Error count \(callbacks.count), expected \(expectedErrors.count)")
         var wire: [String: J] = [:]
@@ -253,9 +288,25 @@ final class ScenarioRunner {
                 } else { try subset(value, record["headers"]?[key], path: "header " + key) }
             }
             if let context = expected["context"] { try subset(context, record["body"]?["context"], path: "batch context") }
+            if let refs = expected["identityTokens"]?.array?.compactMap(\.string) {
+                // Tokens are named by ref; an absent field and an empty list both mean none. Only refs are printed.
+                let wanted = try refs.map { ref -> String in
+                    guard let token = minted[ref] else { throw CheckFailure("Request \(index): token \(ref) was never minted") }
+                    return token
+                }
+                let sent = record["body"]?["identityTokens"]?.array?.compactMap(\.string) ?? []
+                let names = sent.map { token in minted.first { $0.value == token }?.key ?? "<unknown token>" }
+                try require(sent == wanted, "Request \(index) identityTokens \(names), expected \(refs)")
+            }
             let batch = record["body"]?["batch"]?.array ?? []
             let items = expected["batch"]?.array ?? []
             try require(batch.count == items.count, "Batch count request \(index)")
+            for item in batch {
+                // A token travels only in identityTokens: never inside an event.
+                try require(item["identityToken"] == nil, "Request \(index): an item carries identityToken")
+                let text = String(decoding: try JSONEncoder().encode(item), as: UTF8.self)
+                for token in minted.values { try require(!text.contains(token), "Request \(index): an identity token is inside an event") }
+            }
             for (position, item) in items.enumerated() {
                 let label = item["call"]?.string ?? ""
                 guard let call = calls[label] else { throw CheckFailure("Missing call \(label)") }
@@ -285,10 +336,30 @@ final class ScenarioRunner {
             if let status = expected["status"] { try require(status == error.error.status.map { .number(Double($0)) } ?? .null, "Error status mismatch") }
             let labels = expected["eventCalls"]?.array ?? []
             try require(error.events.count == labels.count, "Error event count mismatch")
+            let reported = String(decoding: try JSONEncoder().encode(error.events), as: UTF8.self) + error.error.message
+            for token in minted.values { try require(!reported.contains(token), "An identity token is inside an error report") }
             for (position, label) in labels.enumerated() {
                 guard let event = wire[label.string ?? ""] else { throw CheckFailure("Callback call absent from wire") }
                 for key in ["messageId", "type"] { try require(error.events[position][key] == event[key], "Callback \(key) mismatch") }
             }
+        }
+        if let expectedNotices = expect["notices"]?.array {
+            // Notices are not errors: they are checked on their own, in order, each listed field compared.
+            let actual = notices.snapshot
+            try require(actual.count == expectedNotices.count, "Notice count \(actual.count), expected \(expectedNotices.count)")
+            for (index, expected) in expectedNotices.enumerated() {
+                let notice = actual[index]
+                try require(expected["kind"]?.string == notice.kind.rawValue, "Notice \(index) kind \(notice.kind.rawValue), expected \(expected["kind"]?.string ?? "?")")
+                if let count = expected["count"]?.number { try require(notice.count.map(Double.init) == count, "Notice \(index) count \(String(describing: notice.count))") }
+                if let reason = expected["reason"]?.string { try require(notice.reason == reason, "Notice \(index) reason \(notice.reason ?? "nil"), expected \(reason)") }
+            }
+        }
+        for notice in notices.snapshot {
+            for token in minted.values { try require(!notice.message.contains(token) && !(notice.reason ?? "").contains(token), "An identity token is inside a notice") }
+        }
+        if let expectedCalls = expect["providerCalls"]?.array?.compactMap(\.string) {
+            let actualCalls = await identity?.providerCalls ?? []
+            try require(actualCalls == expectedCalls, "Provider calls \(actualCalls), expected \(expectedCalls)")
         }
         for delay in expect["delays"]?.array ?? [] {
             guard let to = delay["to"]?.number else { throw CheckFailure("Missing to") }

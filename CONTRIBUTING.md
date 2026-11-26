@@ -26,7 +26,7 @@ scripts/test-example-simulator.sh   # example app model and UI tests in a simula
 
 ## Conformance suite
 
-The scenarios in `Tests/ConformanceTests/Fixtures` are the delivery contract: they pin batching, retries, persistence, consent and identity linking, and the runner fails if the SDK's requests differ. `conformance/PROTOCOL.md` is the specification and `conformance/server` is the dependency-free mock server. The runner validates every scenario against the schema, then checks each request the SDK makes. Do not edit scenarios or the schema by hand to make a change pass; open an issue if you think the contract is wrong.
+The scenarios in `Tests/ConformanceTests/Fixtures` are the delivery contract: they pin batching, retries, persistence, consent and identity linking, and the runner fails if the SDK's requests differ. `conformance/PROTOCOL.md` is the specification and `conformance/server` is the dependency-free mock server. The runner validates every scenario against the schema, then checks each request the SDK makes. Do not edit scenarios or the schema by hand to make a change pass; open an issue if you think the contract is wrong. To adopt a newer suite, copy `scenarios`, `scenario.schema.json` and `VERSION` into `Tests/ConformanceTests/Fixtures`, and `PROTOCOL.md` and the `server` files into `conformance`, from the shared conformance suite, and name the suite version in the commit message.
 
 Run one scenario while still validating all of them:
 
