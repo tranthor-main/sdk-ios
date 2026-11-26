@@ -180,11 +180,10 @@ final class IdentityTokenCacheTests: XCTestCase {
 @MainActor
 final class IdentityTokenTests: XCTestCase {
     override func setUp() { super.setUp(); executionTimeAllowance = 20 }
-    private var roots: [URL] = []
-    override func tearDown() { for root in roots { try? FileManager.default.removeItem(at: root) }; roots = []; super.tearDown() }
     private func root() -> URL {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("identity-" + UUID().uuidString)
-        roots.append(url)
+        // The teardown block holds only the URL, so no main-actor state is touched from XCTest's nonisolated tearDown.
+        addTeardownBlock { try? FileManager.default.removeItem(at: url) }
         return url
     }
     private func sdk(_ root: URL, _ wire: Wire, _ sleeper: Sleeper, _ clock: FakeClock, provider: Provider? = nil, reports: Reports = Reports(),
