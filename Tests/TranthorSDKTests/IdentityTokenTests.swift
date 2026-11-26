@@ -924,6 +924,38 @@ final class IdentityTokenTests: XCTestCase {
         XCTAssertEqual(reports.errors.count, 1)
         await second.shutdown()
     }
+
+    func testADamagedMarkerIsNotSalvagedAsAHugeNumber() async throws {
+        for (value, expected) in [(-1, 0), (2.5, 0), (7, 7)] as [(Double, UInt64)] {
+            // Each case needs its own state file: loading a damaged one sets it aside.
+            let root = root(), clock = FakeClock(), sleeper = Sleeper()
+            let first = try await sdk(root, Wire(), sleeper, clock)
+            try await first.track(event: "x")
+            await first.shutdown()
+            try rewriteState(root) { $0["userEpochSequence"] = value; $0.removeValue(forKey: "version") }
+            XCTAssertEqual(try loadState(directory: root, namespace: "default").userEpochSequence, expected, "marker \(value)")
+        }
+    }
+    func testWithoutIdentityTheOrdinaryEventsAreDroppedAndReportedAndARemovalInTheBatchIsParked() async throws {
+        let root = root(), clock = FakeClock(), sleeper = Sleeper(), reports = Reports()
+        let wire = Wire([.success(ResponseNotes()), .failure(refused(["a"], reason: "missing"))])
+        let sdk = try await sdk(root, wire, sleeper, clock, reports: reports)   // no provider, no token ever supplied
+        try await sdk.identify(userId: "a")
+        try await sdk.registerInstallation(token: "apns-token", appId: "com.example.app", environment: .development, permission: .granted)
+        try await sdk.flush()
+        try await sdk.reset()                                    // queues the removal for a
+        try await sdk.track(event: "ordinary", userId: "a")      // a is the first user seen again
+        let failure = await flushFails(sdk)
+        XCTAssertEqual(failure?.status, 403)
+        XCTAssertEqual(reports.errors.count, 1, "the ordinary event is reported once")
+        XCTAssertEqual(reports.errors.first?.events.compactMap { $0["event"]?.string }, ["ordinary"])
+        XCTAssertEqual(try loadState(directory: root, namespace: "default").queued.compactMap { $0["event"]?.string }, ["Installation Removed"], "the removal is parked")
+        XCTAssertEqual(reports.notices.map(\.kind), [.identityRefused])
+        try await sleeper.fire(60_000)
+        for _ in 0..<5000 where !(try loadState(directory: root, namespace: "default").queued.isEmpty) { try await Task.sleep(for: .milliseconds(1)) }
+        XCTAssertTrue(try loadState(directory: root, namespace: "default").queued.isEmpty, "delivered once the server accepts it")
+        await sdk.shutdown()
+    }
     private func waitForRequests(_ wire: Wire, _ count: Int) async throws {
         for _ in 0..<5000 {
             if await wire.sent.count >= count { return }

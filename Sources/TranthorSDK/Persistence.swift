@@ -92,6 +92,9 @@ struct StoredInstallation: Codable, Sendable, Equatable {
     var permission: String
 }
 
+/// Only the restart marker of a state file, for salvaging it from a file that cannot be decoded as a whole.
+private struct EpochMarker: Decodable { let userEpochSequence: UInt64? }
+
 struct JSONStore: Sendable {
     let url: URL
     let consentURL: URL
@@ -306,7 +309,8 @@ struct JSONStore: Sendable {
             // The flag decides whether a refusal holds a batch, so it is kept with the identity.
             if let supplied = object["identityTokenSupplied"] as? Bool { result.identityTokenSupplied = supplied }
             // So does the point from which queued events name the current user: a signed-out user stays signed out.
-            if let epoch = (object["userEpochSequence"] as? NSNumber)?.uint64Value { result.userEpochSequence = epoch }
+            // Read as the normal decode reads it: a negative or fractional value is no marker, and means 0.
+            result.userEpochSequence = (try? JSONDecoder().decode(EpochMarker.self, from: data))?.userEpochSequence ?? 0
         }
         return result
     }

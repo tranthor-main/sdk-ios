@@ -165,8 +165,8 @@ extension TranthorSDK {
     ///
     /// Identity tokens: the current user's token is renewed first when it is missing or about to expire, and the batch
     /// is then sent with the tokens held, because the server decides. A refused identity token renews and retries
-    /// once, drops only previous users' items, and holds the batch when no token can be had; so does identity settings the
-    /// server could not read. Neither counts against the retry budget.
+    /// once, drops only previous users' items, and holds the batch when no token can be had. The batch is also held when
+    /// the server cannot read its identity settings. Neither counts against the retry budget.
     func deliver(_ initial: [[String: JSONValue]], source: DeliverySource) async -> Delivered {
         defer { backoff = nil }
         let stopsOnOptOut = source == .queue
@@ -210,9 +210,22 @@ extension TranthorSDK {
                         // Nothing to renew, drop or hold: a failed send with the normal backoff, never a tight loop.
                         notify(.identityRefused, reason: failure.reason, message: "The server refused the identity token and named no user to renew; the send is retried with the normal backoff")
                         retryable = true
-                    } else if let current, refused.contains(current), !identityInUse, !batch.contains(where: Self.isInstallationRemoval) {
-                        // An app that never supplied a token provider or a token keeps the ordinary refusal: reported and dropped
-                        // below. A batch that holds a removal is the exception: a removal is never dropped for lack of a token.
+                    } else if let current, refused.contains(current), !identityInUse {
+                        // An app that never supplied a token provider or a token keeps the ordinary refusal: its events are
+                        // reported and dropped. A removal in the batch is never dropped for lack of a token: it is split off
+                        // and parked, and only the ordinary events go.
+                        let removals = batch.filter(Self.isInstallationRemoval)
+                        if !removals.isEmpty {
+                            let ordinary = batch.filter { !Self.isInstallationRemoval($0) }
+                            if !ordinary.isEmpty {
+                                configuration.onError?(BatchFailure(error: failure, events: Self.redactingToken(ordinary), attempts: requests))
+                                let goneIDs = Set(ordinary.compactMap { $0["messageId"]?.string })
+                                batch.removeAll { $0["messageId"]?.string.map { goneIDs.contains($0) } == true }
+                                removeFromSource(ordinary, source)
+                            }
+                            return await holdBatch(batch, current: current, parked: Set(removals.compactMap { $0["messageId"]?.string }),
+                                                   source: source, failure: failure)
+                        }
                     } else {
                         for user in refused { state.identityTokens.remove(user) }
                         persistDeliveryState()
