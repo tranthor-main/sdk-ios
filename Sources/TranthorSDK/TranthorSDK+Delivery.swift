@@ -176,6 +176,9 @@ extension TranthorSDK {
         var requests = 0
         var renewedForCurrent = false
         var renewedUsers = Set<String>()
+        // Set when events were given up because the server refused their user: the batch's other events are still sent, but
+        // the delivery as a whole has failed, so an explicit flush says so.
+        var gaveUp: DeliveryFailure?
         while !batch.isEmpty {
             do {
                 try Task.checkCancellation()
@@ -189,7 +192,7 @@ extension TranthorSDK {
                 // A 2xx acknowledges the batch even if cancellation raced with the response.
                 conclude(batch)
                 reportResponseNotes(notes)
-                return Delivered(result: .acknowledged, remaining: batch)
+                return Delivered(result: gaveUp.map { .failed($0) } ?? .acknowledged, remaining: batch)
             } catch {
                 guard !Task.isCancelled, !stopped, !(stopsOnOptOut && state.optedOut) else { return Delivered(result: .interrupted, remaining: batch) }
                 let failure = (error as? DeliveryFailure) ?? DeliveryFailure(status: nil, message: "Delivery failed", retryAfterMs: 0)
@@ -210,22 +213,25 @@ extension TranthorSDK {
                         // Nothing to renew, drop or hold: a failed send with the normal backoff, never a tight loop.
                         notify(.identityRefused, reason: failure.reason, message: "The server refused the identity token and named no user to renew; the send is retried with the normal backoff")
                         retryable = true
-                    } else if let current, refused.contains(current), !identityInUse {
-                        // An app that never supplied a token provider or a token keeps the ordinary refusal: its events are
-                        // reported and dropped. A removal in the batch is never dropped for lack of a token: it is split off
-                        // and parked, and only the ordinary events go.
+                    } else if !identityInUse {
+                        // An app that never supplied a token provider or a token keeps the ordinary refusal: the refused users'
+                        // events are reported and dropped, and the rest of the batch is sent as usual. A removal is never
+                        // dropped for lack of a token: every one in the batch is split off and parked.
+                        let refusedUsers = Set(refused)
+                        let ordinary = batch.filter { !Self.isInstallationRemoval($0) && itemUser($0).map(refusedUsers.contains) == true }
+                        if !ordinary.isEmpty {
+                            configuration.onError?(BatchFailure(error: failure, events: Self.redactingToken(ordinary), attempts: requests))
+                            let goneIDs = Set(ordinary.compactMap { $0["messageId"]?.string })
+                            batch.removeAll { $0["messageId"]?.string.map { goneIDs.contains($0) } == true }
+                            removeFromSource(ordinary, source)
+                            gaveUp = failure
+                        }
                         let removals = batch.filter(Self.isInstallationRemoval)
                         if !removals.isEmpty {
-                            let ordinary = batch.filter { !Self.isInstallationRemoval($0) }
-                            if !ordinary.isEmpty {
-                                configuration.onError?(BatchFailure(error: failure, events: Self.redactingToken(ordinary), attempts: requests))
-                                let goneIDs = Set(ordinary.compactMap { $0["messageId"]?.string })
-                                batch.removeAll { $0["messageId"]?.string.map { goneIDs.contains($0) } == true }
-                                removeFromSource(ordinary, source)
-                            }
                             return await holdBatch(batch, current: current, parked: Set(removals.compactMap { $0["messageId"]?.string }),
                                                    source: source, failure: failure)
                         }
+                        continue
                     } else {
                         for user in refused { state.identityTokens.remove(user) }
                         persistDeliveryState()
@@ -288,7 +294,7 @@ extension TranthorSDK {
             }
         }
         // Every item was dropped for an unverified previous user: nothing is left to send.
-        return Delivered(result: .acknowledged, remaining: batch)
+        return Delivered(result: gaveUp.map { .failed($0) } ?? .acknowledged, remaining: batch)
     }
     /// Delivers the opt-out removals with the ordinary retry policy. True when none is left. One retryable
     /// failure cycle parks them: there is no timer and no background retry loop. 2xx and other 4xx end a
@@ -532,11 +538,7 @@ extension TranthorSDK {
     /// While a batch is held the queue keeps at most `heldQueueLimit` events; a queue that is already longer when the
     /// hold starts is cut down now, the oldest first, and what goes is reported.
     func trimToHeldLimit() {
-        let capacity = min(configuration.maxQueueSize, Self.heldQueueLimit)
-        var removed: [QueuedEvent] = []
-        while queue.events.count > capacity && queue.events.count > inFlightCount {
-            removed.append(queue.events.remove(at: inFlightCount + Self.overflowIndex(queue.events[inFlightCount...].map(\.event))))
-        }
+        let removed = trim(&queue.events)
         guard !removed.isEmpty else { return }
         deleteFiles(removed.map(\.sequence))
         reportDropped(removed.map(\.event))

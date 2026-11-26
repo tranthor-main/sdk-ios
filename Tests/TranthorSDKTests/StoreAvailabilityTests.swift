@@ -80,10 +80,11 @@ final class StoreAvailabilityTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: store.consentURL), consent)
     }
     #endif
-    /// A state file without `version` is not trusted: it is set aside as state.corrupt.json and only its anonymous ID and
-    /// user ID are kept. The queue, in-flight events, stored push token and pending removals are not restored (they stay in
-    /// the set-aside file). Consent comes from the consent file, so an opted-in user stays opted in.
-    func testStateWithoutVersionIsSetAsideAndOnlyTheIdentityIsKept() async throws {
+    /// A state file without `version` is not trusted: it is set aside as state.corrupt.json and only its anonymous ID, user
+    /// ID, installation record and pending removals are kept (the removals and the record are what the server may still
+    /// be owed). The queue and in-flight events of that format are not restored (they stay in the set-aside file).
+    /// Consent comes from the consent file, so an opted-in user stays opted in.
+    func testStateWithoutVersionIsSetAsideAndTheIdentityTheInstallationAndTheRemovalsAreKept() async throws {
         let root = root(); defer { try? FileManager.default.removeItem(at: root) }
         let store = try JSONStore(directory: root, namespace: "default")
         let anonymous = UUID().uuidString
@@ -101,7 +102,7 @@ final class StoreAvailabilityTests: XCTestCase {
         var reread = try JSONStore(directory: root, namespace: "default")
         let state = try reread.load()
         XCTAssertTrue(state.queued.isEmpty, "The queued event is not restored")
-        XCTAssertNil(state.installation, "The stored push token is not restored")
+        XCTAssertEqual(state.installation?.token, "ab", "The installation record is kept: a removal for it may still be owed")
         XCTAssertEqual(state.userId, "u1")
     }
     func testAConsentFileThatCannotBeDecodedOptsTheUserOutAndIsSetAside() async throws {

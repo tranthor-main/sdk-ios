@@ -294,12 +294,9 @@ public actor TranthorSDK {
         var next = queue.nextSequence
         let added = items.map { item -> QueuedEvent in defer { next += 1 }; return QueuedEvent(sequence: next, event: item) }
         var events = queue.events + added
-        var removed: [QueuedEvent] = []
         // An identify that ends the hold is admitted under the ordinary limit: the hold is over once it is stored.
-        let capacity = held && !endingHold ? min(configuration.maxQueueSize, Self.heldQueueLimit) : configuration.maxQueueSize
-        while events.count > capacity && events.count > inFlightCount {
-            removed.append(events.remove(at: inFlightCount + Self.overflowIndex(events[inFlightCount...].map(\.event))))
-        }
+        // Nothing is taken out of the queue until the write below has succeeded, so a failed write trims nothing.
+        let removed = trim(&events, endingHold: endingHold)
         let dropped = Set(removed.map(\.sequence))
         let written = added.filter { !dropped.contains($0.sequence) }
         do { try store.append(written) }
@@ -324,13 +321,30 @@ public actor TranthorSDK {
     }
     /// While a batch is held the queue keeps at most this many events; the oldest are dropped and reported.
     static let heldQueueLimit = 1000
-    static func overflowIndex(_ queue: [[String: JSONValue]]) -> Int {
+    /// The one place the queue is kept to its limit: takes the oldest events over it out of `events`, never one of the
+    /// batch in flight, and returns them. The limit is `maxQueueSize`, or at most `heldQueueLimit` while a hold is
+    /// active (the identify that ends it excepted); under the held limit an `Installation Removed` is never taken.
+    func trim(_ events: inout [QueuedEvent], endingHold: Bool = false) -> [QueuedEvent] {
+        let holding = held && !endingHold
+        let limit = holding ? min(configuration.maxQueueSize, Self.heldQueueLimit) : configuration.maxQueueSize
+        var removed: [QueuedEvent] = []
+        while events.count > limit && events.count > inFlightCount {
+            guard let index = Self.overflowIndex(events[inFlightCount...].map(\.event), keepingRemovals: holding) else { break }
+            removed.append(events.remove(at: inFlightCount + index))
+        }
+        return removed
+    }
+    /// Which event goes first when the queue is over its limit: an ordinary one, then an installation event that a newer
+    /// one for the same token supersedes, then the oldest. With `keepingRemovals` an `Installation Removed` is never chosen;
+    /// nil when nothing else is left.
+    static func overflowIndex(_ queue: [[String: JSONValue]], keepingRemovals: Bool = false) -> Int? {
+        func isRemoval(_ item: [String: JSONValue]) -> Bool { item["event"]?.string == "Installation Removed" && installationTarget(item) != nil }
         if let ordinary = queue.firstIndex(where: { installationTarget($0) == nil }) { return ordinary }
-        for index in queue.indices {
+        for index in queue.indices where !(keepingRemovals && isRemoval(queue[index])) {
             let target = installationTarget(queue[index])
             if queue[(index + 1)...].contains(where: { installationTarget($0) == target }) { return index }
         }
-        return 0
+        return keepingRemovals ? queue.firstIndex(where: { !isRemoval($0) }) : 0
     }
     /// Clears the stored user ID and generates a new anonymous UUID. Queued items keep their identities. A
     /// signed-in customer's push Installation is removed under the outgoing identity, in the same durable write
