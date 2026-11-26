@@ -123,7 +123,10 @@ public actor TranthorSDK {
         #endif
         pendingDeletion = loaded.4
         // Before anyone identified, the current user is the first one a queued event names (it was only in memory).
-        if state.userId == nil { observedUser = queue.events.lazy.compactMap { itemUser($0.event) }.first }
+        if state.userId == nil {
+            let epoch = state.userEpochSequence
+            observedUser = queue.events.lazy.filter { $0.sequence >= epoch }.compactMap { itemUser($0.event) }.first
+        }
         // Tokens left by an earlier run: keep only what the queue, the removals and the current user need, and what the
         // server would still accept.
         if pruneTokens() { persistDeliveryState() }
@@ -210,7 +213,7 @@ public actor TranthorSDK {
             if fingerprint != sentInstallation { registration = installationItem("Installation Registered", installation, details: true) }
         }
         do {
-            try enqueue("identify", data, alongside: registration.map { [$0] } ?? [], savingState: true)
+            try enqueue("identify", data, alongside: registration.map { [$0] } ?? [], savingState: true, endingHold: endsHold)
             if registration != nil { sentInstallation = fingerprint }
             // Signing the same user in again registers the phone anew, which supersedes a removal still waiting for them.
             if let user, let registration, let target = Self.installationTarget(registration) { supersedeRemovals(target: target, user: user) }
@@ -263,7 +266,7 @@ public actor TranthorSDK {
         return data
     }
     private func enqueue(_ type: String, _ payload: [String: JSONValue], alongside extra: [[String: JSONValue]] = [],
-                         savingState: Bool = false) throws {
+                         savingState: Bool = false, endingHold: Bool = false) throws {
         guard !state.optedOut, !stopped else { return }
         var item = payload
         item["type"] = .string(type)
@@ -275,7 +278,7 @@ public actor TranthorSDK {
                 events: Self.redactingToken([item]), attempts: 0))
             throw error
         }
-        try admit([item] + extra, savingState: savingState)
+        try admit([item] + extra, savingState: savingState, endingHold: endingHold)
         // Only once the event is stored, so a failed write does not make its user the current one.
         if state.userId == nil, observedUser == nil, let user = itemUser(item) { observedUser = user }
     }
@@ -284,12 +287,13 @@ public actor TranthorSDK {
     /// can be, and then the oldest one that a newer event for the same token supersedes goes first. Pass
     /// `savingState` when the caller also changed the state and wants it saved with the events: the event files are
     /// written first and removed again if the state write fails, so the caller's rollback leaves memory and disk the same.
-    func admit(_ items: [[String: JSONValue]], savingState: Bool = false) throws {
+    func admit(_ items: [[String: JSONValue]], savingState: Bool = false, endingHold: Bool = false) throws {
         var next = queue.nextSequence
         let added = items.map { item -> QueuedEvent in defer { next += 1 }; return QueuedEvent(sequence: next, event: item) }
         var events = queue.events + added
         var removed: [QueuedEvent] = []
-        let capacity = held ? min(configuration.maxQueueSize, Self.heldQueueLimit) : configuration.maxQueueSize
+        // An identify that ends the hold is admitted under the ordinary limit: the hold is over once it is stored.
+        let capacity = held && !endingHold ? min(configuration.maxQueueSize, Self.heldQueueLimit) : configuration.maxQueueSize
         while events.count > capacity && events.count > inFlightCount {
             removed.append(events.remove(at: inFlightCount + Self.overflowIndex(events[inFlightCount...].map(\.event))))
         }
@@ -335,7 +339,9 @@ public actor TranthorSDK {
         // Built before the rotation, so it carries the outgoing identity.
         let removal = installation.map { installationItem("Installation Removed", $0, details: false) }
         let previous = (userId: state.userId, anonymousId: state.anonymousId, sent: sentInstallation)
-        let previousTokens = state.identityTokens, previousObserved = observedUser
+        let previousTokens = state.identityTokens, previousObserved = observedUser, previousEpoch = state.userEpochSequence
+        // The events and the removal queued so far belong to the outgoing user; a restart must not make them current again.
+        state.userEpochSequence = queue.nextSequence + (removal == nil ? 0 : 1)
         state.userId = nil
         observedUser = nil
         state.anonymousId = UUID().uuidString
@@ -347,7 +353,7 @@ public actor TranthorSDK {
             if let removal { try admit([removal], savingState: true) } else { try store.save(state) }
         } catch {
             (state.userId, state.anonymousId, sentInstallation) = previous
-            state.identityTokens = previousTokens; observedUser = previousObserved
+            state.identityTokens = previousTokens; observedUser = previousObserved; state.userEpochSequence = previousEpoch
             throw error
         }
     }

@@ -833,6 +833,31 @@ final class IdentityTokenTests: XCTestCase {
         try rewriteState(root) { $0["identityTokenSupplied"] = true; $0.removeValue(forKey: "version") }
         XCTAssertTrue(try loadState(directory: root, namespace: "default").identityTokenSupplied)
     }
+
+    func testAfterAResetALaunchDoesNotMakeTheOutgoingUserCurrent() async throws {
+        let root = root(), clock = FakeClock(), sleeper = Sleeper(), reports = Reports()
+        let first = try await sdk(root, Wire(), sleeper, clock, provider: Provider([]))
+        try await first.track(event: "x", userId: "a")
+        try await first.reset()
+        await first.shutdown()
+        let wire = Wire([.failure(refused(["a"], reason: "missing"))])
+        let sdk = try await sdk(root, wire, sleeper, clock, provider: Provider([]), reports: reports)
+        _ = await flushFails(sdk)
+        XCTAssertTrue(try loadState(directory: root, namespace: "default").queued.isEmpty, "a is not the current user after a reset, so a's event is a previous user's")
+        XCTAssertEqual(reports.errors.count, 1)
+        await sdk.shutdown()
+    }
+    func testIdentifyingThatEndsAHoldIsNotHeldToTheHeldLimit() async throws {
+        let root = root(), clock = FakeClock(), sleeper = Sleeper(), reports = Reports()
+        let wire = Wire([.failure(refused(["a"], reason: "missing"))])
+        let sdk = try await sdk(root, wire, sleeper, clock, provider: Provider([]), reports: reports)
+        try await sdk.identify(userId: "a")
+        _ = await flushFails(sdk)
+        for index in 0..<999 { try await sdk.track(event: "e\(index)", userId: "a") }
+        try await sdk.identify(userId: "a", identityToken: clock.token("a", expiresIn: 3600))
+        await sdk.shutdown()
+        XCTAssertTrue(reports.errors.filter { $0.attempts == 0 }.isEmpty, "nothing was dropped for the held limit")
+    }
     private func waitForRequests(_ wire: Wire, _ count: Int) async throws {
         for _ in 0..<5000 {
             if await wire.sent.count >= count { return }

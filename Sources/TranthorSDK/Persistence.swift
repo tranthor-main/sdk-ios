@@ -24,10 +24,13 @@ struct StoredState: Codable, Sendable {
     var identityTokens = IdentityTokenCache()
     /// An identity token has been handed over through `identify`. Never cleared: it decides whether a refusal holds a batch.
     var identityTokenSupplied = false
+    /// The sequence number from which queued events count when the current user is worked out after a restart: `reset()`
+    /// moves it past the events it left behind, so the outgoing user does not become the current user again.
+    var userEpochSequence: UInt64 = 0
 
     init() {}
 
-    private enum CodingKeys: String, CodingKey { case version, anonymousId, userId, optedOut, installation, pendingRemovals, identityTokens, identityTokenSupplied }
+    private enum CodingKeys: String, CodingKey { case version, anonymousId, userId, optedOut, installation, pendingRemovals, identityTokens, identityTokenSupplied, userEpochSequence }
     init(from decoder: any Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         let version = try values.decode(Int.self, forKey: .version)
@@ -48,6 +51,7 @@ struct StoredState: Codable, Sendable {
         identityTokens = (try? values.decodeIfPresent(IdentityTokenCache.self, forKey: .identityTokens)) ?? IdentityTokenCache()
         // Damage to the flag alone must not turn identity off while tokens are cached.
         identityTokenSupplied = (try? values.decodeIfPresent(Bool.self, forKey: .identityTokenSupplied)) ?? !identityTokens.isEmpty
+        userEpochSequence = (try? values.decodeIfPresent(UInt64.self, forKey: .userEpochSequence)) ?? 0
     }
 }
 

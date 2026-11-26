@@ -454,8 +454,9 @@ extension TranthorSDK {
     /// A batch held for the current user's missing token, or for a removal that cannot be sent: the items of other users,
     /// and anonymous ones, are sent separately first in one request, so one user's token does not keep back anyone
     /// else's events. The held items (the current user's, and the removals in `parked`) keep their place at the head of
-    /// the queue and are tried again after the provider backoff. Each hold is one `identity-refused` notice, a held removal's included: nothing is given up,
-    /// so `onError` stays silent.
+    /// the queue and are tried again after the provider backoff. Each hold is one `identity-refused` notice, a held removal's included: this function gives
+    /// nothing up and reports nothing through `onError`. A send of the other items that fails is reported by `deliver` as
+    /// usual, and a removal among them is kept.
     func holdBatch(_ batch: [[String: JSONValue]], current: String?, parked: Set<String>, source: DeliverySource, failure: DeliveryFailure) async -> Delivered {
         notify(.identityRefused, reason: failure.reason, message: Self.refusalMessage(failure.reason))
         func isHeld(_ item: [String: JSONValue]) -> Bool {
