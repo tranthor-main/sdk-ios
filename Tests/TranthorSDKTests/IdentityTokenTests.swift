@@ -774,6 +774,14 @@ final class IdentityTokenTests: XCTestCase {
         ["type": "track", "event": "Installation Removed", "messageId": .string(id), "timestamp": "2026-11-01T00:00:00.000Z",
          "userId": .string(user), "properties": ["token": .string("t-" + user), "appId": "com.example.app", "platform": "ios"]]
     }
+    @discardableResult
+    private func rewriteStateReturning(_ root: URL, _ change: (inout [String: Any]) -> Void) throws -> [String: Any] {
+        let file = root.appendingPathComponent("sha256-" + "default".sha256Hex).appendingPathComponent("state.json")
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        change(&object)
+        try JSONSerialization.data(withJSONObject: object).write(to: file)
+        return object
+    }
     private func rewriteState(_ root: URL, _ change: (inout [String: Any]) -> Void) throws {
         let folder = root.appendingPathComponent("sha256-" + "default".sha256Hex)
         let file = folder.appendingPathComponent("state.json")
@@ -925,16 +933,83 @@ final class IdentityTokenTests: XCTestCase {
         await second.shutdown()
     }
 
-    func testADamagedMarkerIsNotSalvagedAsAHugeNumber() async throws {
-        for (value, expected) in [(-1, 0), (2.5, 0), (7, 7)] as [(Double, UInt64)] {
+    func testASalvagedStateTreatsEveryQueuedEventAsASignedOutUsersWhateverItsMarkerSaid() async throws {
+        for value in [-1.0, 2.5, 7.0, 0.0] {
             // Each case needs its own state file: loading a damaged one sets it aside.
             let root = root(), clock = FakeClock(), sleeper = Sleeper()
             let first = try await sdk(root, Wire(), sleeper, clock)
-            try await first.track(event: "x")
+            try await first.track(event: "x", userId: "a")
+            try await first.track(event: "y", userId: "a")
             await first.shutdown()
             try rewriteState(root) { $0["userEpochSequence"] = value; $0.removeValue(forKey: "version") }
-            XCTAssertEqual(try loadState(directory: root, namespace: "default").userEpochSequence, expected, "marker \(value)")
+            let state = try loadState(directory: root, namespace: "default")
+            XCTAssertEqual(state.userEpochSequence, 3, "marker \(value): the next queue number, so neither queued event can make a user current")
+            XCTAssertEqual(state.queued.count, 2)
         }
+    }
+    func testASalvagedStateKeepsThePendingRemovalsAndTheInstallation() async throws {
+        let root = root(), clock = FakeClock(), sleeper = Sleeper()
+        let first = try await sdk(root, Wire(), sleeper, clock)
+        try await first.identify(userId: "a")
+        try await first.registerInstallation(token: "apns-token", appId: "com.example.app", environment: .development, permission: .granted)
+        try await first.flush()
+        try await first.optOut()   // leaves a removal to deliver
+        await first.shutdown()
+        let before = try rewriteStateReturning(root) { $0.removeValue(forKey: "version") }
+        XCTAssertEqual((before["pendingRemovals"] as? [Any])?.count, 1)
+        let state = try loadState(directory: root, namespace: "default")
+        XCTAssertEqual(state.pendingRemovals.count, 1, "the opt-out removal survives the salvage")
+        XCTAssertEqual(state.installation?.token, "apns-token", "and so does the installation record")
+    }
+    func testWithoutIdentityOnlyTheRefusedUsersEventsAreDroppedAndTheRestIsSent() async throws {
+        let root = root(), clock = FakeClock(), sleeper = Sleeper(), reports = Reports()
+        let wire = Wire([.failure(refused(["a"], reason: "missing"))])
+        let sdk = try await sdk(root, wire, sleeper, clock, reports: reports)   // no provider, no token ever supplied
+        try await sdk.track(event: "mine", userId: "a")
+        try await sdk.track(event: "other", userId: "b")
+        try await sdk.track(event: "anon", anonymousId: "anon-1")
+        let failure = await flushFails(sdk)
+        XCTAssertEqual(failure?.status, 403, "events were given up, so an explicit flush says so")
+        XCTAssertEqual(reports.errors.count, 1)
+        XCTAssertEqual(reports.errors.first?.events.compactMap { $0["event"]?.string }, ["mine"], "only the refused user's event is dropped and reported")
+        let sent = await wire.sent
+        XCTAssertEqual(sent.count, 2)
+        XCTAssertEqual(sent.last?.batch.compactMap { $0["event"]?.string }, ["other", "anon"], "the rest goes out as usual")
+        XCTAssertTrue(try loadState(directory: root, namespace: "default").queued.isEmpty)
+        await sdk.shutdown()
+    }
+    func testAHeldQueueNeverTrimsARemovalAndOnlyOrdinaryEventsGoFirst() async throws {
+        let root = root(), clock = FakeClock(), sleeper = Sleeper(), reports = Reports()
+        let wire = Wire([.failure(refused(["a"], reason: "missing"))])
+        let sdk = try await sdk(root, wire, sleeper, clock, provider: Provider([]), reports: reports)
+        try await sdk.identify(userId: "a")
+        _ = await flushFails(sdk)
+        let removals: [[String: JSONValue]] = (0..<1100).map { index in
+            ["type": "track", "event": "Installation Removed", "messageId": .string("m\(index)"), "timestamp": "2026-11-01T00:00:00.000Z",
+             "userId": "a", "properties": ["token": .string("t\(index)"), "appId": "com.example.app"]]
+        }
+        try await sdk.admit(removals)
+        XCTAssertEqual(try loadState(directory: root, namespace: "default").queued.map { $0["event"]?.string }.filter { $0 == "Installation Removed" }.count, 1100,
+                       "no removal was trimmed, even above the limit")
+        try await sdk.admit([removals[0].merging(["messageId": "extra"]) { $1 }])
+        XCTAssertEqual(try loadState(directory: root, namespace: "default").queued.count, 1101, "only removals are left: nothing more to trim")
+        await sdk.shutdown()
+        let dropped = reports.errors.filter { $0.attempts == 0 }.flatMap(\.events)
+        XCTAssertEqual(dropped.compactMap { $0["type"]?.string }, ["identify"], "only the ordinary event was trimmed")
+    }
+    func testAFailedWriteWhileHeldDropsNothing() async throws {
+        let root = root(), clock = FakeClock(), sleeper = Sleeper(), reports = Reports(), writes = FailingWrites()
+        let wire = Wire([.failure(refused(["a"], reason: "missing"))])
+        let sdk = try await sdk(root, wire, sleeper, clock, provider: Provider([]), reports: reports, write: { try writes.write($0, $1) })
+        try await sdk.identify(userId: "a")
+        _ = await flushFails(sdk)
+        for index in 0..<999 { try await sdk.track(event: "e\(index)", userId: "a") }
+        writes.setFailing(true)
+        do { try await sdk.track(event: "one-too-many", userId: "a"); XCTFail("the write fails") } catch {}
+        writes.setFailing(false)
+        XCTAssertEqual(try loadState(directory: root, namespace: "default").queued.count, 1000, "the failed write trimmed nothing")
+        await sdk.shutdown()
+        XCTAssertTrue(reports.errors.filter { $0.attempts == 0 }.isEmpty)
     }
     func testWithoutIdentityTheOrdinaryEventsAreDroppedAndReportedAndARemovalInTheBatchIsParked() async throws {
         let root = root(), clock = FakeClock(), sleeper = Sleeper(), reports = Reports()

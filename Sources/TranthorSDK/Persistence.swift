@@ -92,8 +92,17 @@ struct StoredInstallation: Codable, Sendable, Equatable {
     var permission: String
 }
 
-/// Only the restart marker of a state file, for salvaging it from a file that cannot be decoded as a whole.
-private struct EpochMarker: Decodable { let userEpochSequence: UInt64? }
+/// The fields of a state file that are worth keeping when the file cannot be decoded as a whole.
+private struct SalvagedFields: Decodable {
+    let pendingRemovals: [[String: JSONValue]]?
+    let installation: StoredInstallation?
+    private enum CodingKeys: String, CodingKey { case pendingRemovals, installation }
+    init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        pendingRemovals = try? values.decodeIfPresent([[String: JSONValue]].self, forKey: .pendingRemovals)
+        installation = try? values.decodeIfPresent(StoredInstallation.self, forKey: .installation)
+    }
+}
 
 struct JSONStore: Sendable {
     let url: URL
@@ -141,6 +150,7 @@ struct JSONStore: Sendable {
         let consent = consentData.flatMap { try? JSONDecoder().decode(Consent.self, from: $0) }
         var state = StoredState()
         var unsupportedStateVersion = false
+        var salvaged = false
         var decodedOptedIn = false
         interruptedOptOut = false
         if let data = stateData {
@@ -154,6 +164,7 @@ struct JSONStore: Sendable {
                     unsupportedStateVersion = true
                 }
                 state = salvageIdentity(data)
+                salvaged = true
                 try quarantine(url, to: corruptURL)
             }
         }
@@ -173,6 +184,9 @@ struct JSONStore: Sendable {
             state.optedOut = true
         }
         let queue = try loadQueue()
+        // A state file that had to be salvaged cannot say who was signed in when the queued events were made, so every one
+        // of them counts as a signed-out user's: the current user is whoever the next event names.
+        if salvaged { state.userEpochSequence = queue.nextSequence }
         ownsVerifiedFile = true
         return LoadedStore(state: state, queue: queue)
     }
@@ -309,8 +323,12 @@ struct JSONStore: Sendable {
             // The flag decides whether a refusal holds a batch, so it is kept with the identity.
             if let supplied = object["identityTokenSupplied"] as? Bool { result.identityTokenSupplied = supplied }
             // So does the point from which queued events name the current user: a signed-out user stays signed out.
-            // Read as the normal decode reads it: a negative or fractional value is no marker, and means 0.
-            result.userEpochSequence = (try? JSONDecoder().decode(EpochMarker.self, from: data))?.userEpochSequence ?? 0
+            // What a signed-out phone still owes the server must survive: the removals an opt-out left, and the record of the
+            // installation they belong to. Each is read on its own, so damage to one does not cost the other.
+            if let fields = try? JSONDecoder().decode(SalvagedFields.self, from: data) {
+                result.pendingRemovals = fields.pendingRemovals ?? []
+                result.installation = fields.installation
+            }
         }
         return result
     }
