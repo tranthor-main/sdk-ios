@@ -8,8 +8,8 @@ final class NoRedirect: NSObject, URLSessionTaskDelegate, Sendable {
     }
 }
 
-/// What a 2xx response says besides success: how many events the server dropped (`x-tranthor-dropped-events`) or
-/// counted as unverified (`x-tranthor-unverified-events`).
+/// What a successful response says besides success: how many events the server dropped, and how many it accepted
+/// without a valid identity token.
 struct ResponseNotes: Sendable, Equatable {
     var status = 200
     var dropped = 0
@@ -144,8 +144,8 @@ final class Transport: SDKTransport, @unchecked Sendable {
         let reason = body["reason"]?.string.flatMap { $0.utf8.count <= 40 ? $0 : nil }
         return ErrorDetail(code: code, userIds: ids.map { Array($0.prefix(50)) }, reason: reason)
     }
-    /// The `Retry-After` of a failure. An identity 503 is held for it up to five minutes, and at least a second when the
-    /// header is there but says 0; every other failure keeps the 30 s cap.
+    /// How long the server asked to wait. For identity settings it could not read the wait is honoured up to five
+    /// minutes, and is at least a second when the server named 0; every other failure keeps the ordinary cap.
     static func retryAfterMs(_ header: String?, identityUnavailable: Bool) -> Double {
         let wait = retryAfter(header, capSeconds: identityUnavailable ? 300 : 30)
         if identityUnavailable, wait == 0, header?.isASCIIDigits == true { return unavailableHoldMinMs }

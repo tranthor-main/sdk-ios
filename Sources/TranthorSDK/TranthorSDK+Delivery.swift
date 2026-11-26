@@ -164,9 +164,9 @@ extension TranthorSDK {
     /// withdrawn, so they do not stop on opt-out.
     ///
     /// Identity tokens: the current user's token is renewed first when it is missing or about to expire, and the batch
-    /// is then sent with the tokens held, because the server decides. A `403 identity_not_verified` renews and retries
-    /// once, drops only previous users' items, and holds the batch when no token can be had; an identity `503` holds the
-    /// batch. Neither counts against the retry budget.
+    /// is then sent with the tokens held, because the server decides. A refused identity token renews and retries
+    /// once, drops only previous users' items, and holds the batch when no token can be had; so does identity settings the
+    /// server could not read. Neither counts against the retry budget.
     func deliver(_ initial: [[String: JSONValue]], source: DeliverySource) async -> Delivered {
         defer { backoff = nil }
         let stopsOnOptOut = source == .queue
@@ -210,8 +210,9 @@ extension TranthorSDK {
                         // Nothing to renew, drop or hold: a failed send with the normal backoff, never a tight loop.
                         notify(.identityRefused, reason: failure.reason, message: "The server refused the identity token and named no user to renew; the send is retried with the normal backoff")
                         retryable = true
-                    } else if let current, refused.contains(current), !identityInUse {
-                        // An app that never supplied a token provider or a token keeps the ordinary 403: reported and dropped below.
+                    } else if let current, refused.contains(current), !identityInUse, !batch.contains(where: Self.isInstallationRemoval) {
+                        // An app that never supplied a token provider or a token keeps the ordinary refusal: reported and dropped
+                        // below. A batch that holds a removal is the exception: a removal is never dropped for lack of a token.
                     } else {
                         for user in refused { state.identityTokens.remove(user) }
                         persistDeliveryState()
@@ -353,18 +354,18 @@ extension TranthorSDK {
     var identityInUse: Bool { configuration.identityTokenProvider != nil || state.identityTokenSupplied }
     /// The user whose events the app is producing now: the last identify, else the first user seen on an event.
     var currentUser: String? { state.userId ?? observedUser }
-    /// How many of `queued` the next request takes. With identity in use no request carries more than ten users.
+    /// How many of `queued` the next request takes. With identity in use a request is limited in how many users it carries.
     func takeCount<S: Sequence>(_ queued: S) -> Int where S.Element == [String: JSONValue] {
         requestCut(queued, batchSize: configuration.batchSize, limitUsers: identityInUse)
     }
     /// The tokens for the users of a batch, one per user in the order they first appear, while the server would still
-    /// accept them (it allows `exp` + 120 s). Anonymous events need none.
+    /// accept them. Anonymous events need none.
     func tokens(for batch: [[String: JSONValue]]) -> [String] {
         let nowMs = now()
         return distinctUsers(batch).compactMap { state.identityTokens.fresh(for: $0, nowMs: nowMs, minValidityMs: -tokenGraceMs) }
     }
     /// Keeps a token while its user is the current user (unless `keepCurrent` is false) or still has events queued, in
-    /// flight or waiting as a removal, and while the server would still accept it (`exp` + 120 s). True when a token was
+    /// flight or waiting as a removal, and while the server would still accept it. True when a token was
     /// removed, so the caller saves the state.
     @discardableResult
     func pruneTokens(keeping extra: [String] = [], keepCurrent: Bool = true) -> Bool {
@@ -529,18 +530,18 @@ extension TranthorSDK {
     }
     func holdEnded(_ generation: Int) {
         guard generation == holdGeneration, held else { return }
-        held = false; holdTask = nil
-        // A removal parked by the hold gets its new cycle too.
-        if !state.pendingRemovals.isEmpty { removalParked = nil }
+        endHold()
         beginCycle()
-        armTimer()
     }
+    /// Releases the hold, whoever ends it: its timer is cancelled, a removal it parked gets its cycle back (nothing
+    /// else would retry it), and, if there was a hold, automatic delivery is armed again.
     func endHold() {
-        // A removal the hold parked has no timer left once the hold is over: it gets its cycle back.
-        if held, !state.pendingRemovals.isEmpty { removalParked = nil }
+        let wasHeld = held
+        if wasHeld, !state.pendingRemovals.isEmpty { removalParked = nil }
         held = false
         holdGeneration &+= 1
         holdTask?.cancel(); holdTask = nil
+        if wasHeld { armTimer() }
     }
     /// A 2xx can carry the server's counts of events it dropped or could not verify (Required and Monitor). They are
     /// surfaced once per response, with no token or user ID, so a dropped registration is not silent.

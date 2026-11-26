@@ -35,8 +35,8 @@ public struct Configuration: Sendable {
     /// or returning nil means "no token for this user": the batch is still sent with the tokens the SDK has, and the
     /// provider is not called again for 60 seconds, and a batch held for lack of a token waits that long. Optional.
     public let identityTokenProvider: (@Sendable (String) async throws -> String?)?
-    /// The app ID sent as `x-tranthor-app-id` on every request. Default: the app's bundle identifier. An empty value
-    /// uses the default. Nil when the app has no bundle identifier and none was given, and then no header is sent.
+    /// The app ID sent with every request. Default: the app's bundle identifier. An empty value uses the default. Nil
+    /// when the app has no bundle identifier and none was given, and then no app ID is sent.
     public let appId: String?
     /// Milliseconds a batch waits for `identityTokenProvider` before it is sent anyway. Default 20,000. Not public API:
     /// tests set it. Anything that is not a number above 0 keeps the previous value.
@@ -110,12 +110,12 @@ public struct DeliveryFailure: Error, Sendable, Equatable {
     public let status: Int?
     /// A short description. It never contains the write key or event data.
     public let message: String
-    /// How long the server asked to wait before retrying (`Retry-After`), in milliseconds; 0 if it did not.
+    /// How long the server asked to wait before retrying, in milliseconds; 0 if it did not.
     public let retryAfterMs: Double
-    /// The machine-readable `code` of the server's JSON error body, for example `identity_not_verified`. Read only for
-    /// `403` and `503` responses; nil for any other status, and when the body had none.
+    /// The machine-readable code the server gave for a refusal of an identity token or of the write key, or for
+    /// identity settings it could not read. Nil for any other failure, and when the server gave none.
     public let code: String?
-    /// The user IDs a `403 identity_not_verified` named, when it named any.
+    /// The user IDs the server named when it refused their identity tokens, when it named any.
     public let userIds: [String]?
     /// Why the server refused an identity token (`missing`, `signature`, `expired`, `lifetime`, `audience`...), when it
     /// said. The list is open: `missing`, `malformed`, `unknown_key`, `signature`, `expired`, `not_yet_valid`, `lifetime`,

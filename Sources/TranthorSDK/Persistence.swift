@@ -305,6 +305,8 @@ struct JSONStore: Sendable {
             result.userId = object["userId"] as? String
             // The flag decides whether a refusal holds a batch, so it is kept with the identity.
             if let supplied = object["identityTokenSupplied"] as? Bool { result.identityTokenSupplied = supplied }
+            // So does the point from which queued events name the current user: a signed-out user stays signed out.
+            if let epoch = (object["userEpochSequence"] as? NSNumber)?.uint64Value { result.userEpochSequence = epoch }
         }
         return result
     }

@@ -9,13 +9,13 @@ import Foundation
 let maxUsersPerRequest = 10
 /// A token with less than this left is renewed through the provider before the batch is sent.
 let renewBelowMs = 60_000.0
-/// How long an identity 503 is held: the server's `Retry-After`, bounded by the minimum and maximum below, and this
-/// long when it names none.
+/// How long a batch is held when the server cannot read its identity settings: the wait it asks for, bounded by the
+/// minimum and maximum below, and this long when it names none.
 let unavailableHoldDefaultMs = 30_000.0
 let unavailableHoldMinMs = 1_000.0
-/// The server's `Retry-After` on an identity 503 is honoured up to this long (generic retries cap it at 30 s).
+/// The longest wait the server may ask for when it cannot read its identity settings (ordinary retries cap it lower).
 let unavailableHoldMaxMs = 300_000.0
-/// The server accepts a token until `exp` plus this long, so a cached one is still attached that long after `exp`.
+/// How long after `exp` the server still accepts a token, so a cached one is still attached for that long.
 let tokenGraceMs = 120_000.0
 let unavailableCodes: Set<String> = ["identity_settings_unavailable", "identity_secrets_unavailable"]
 /// 9999-12-31T23:59:59Z in seconds; anything beyond is not a real expiry.
@@ -67,7 +67,7 @@ struct IdentityTokenCache: Codable, Sendable, Equatable {
         if let exp = decodeJwtExp(token), exp * 1000 - nowMs < minValidityMs { return nil }
         return token
     }
-    /// Removes the tokens the server would no longer accept, `exp` + 120 s. True when something was removed.
+    /// Removes the tokens the server would no longer accept. True when something was removed.
     @discardableResult
     mutating func evictExpired(nowMs: Double) -> Bool {
         let before = tokens.count

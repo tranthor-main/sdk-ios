@@ -122,6 +122,9 @@ public actor TranthorSDK {
         lifecycle = await LifecycleObserver(sdk: self)
         #endif
         pendingDeletion = loaded.4
+        // Numbering never restarts below the marker: an empty queue is numbered from 1 when it is loaded, which would put
+        // new events before the point from which the current user is worked out.
+        if queue.nextSequence < state.userEpochSequence { queue.nextSequence = state.userEpochSequence }
         // Before anyone identified, the current user is the first one a queued event names (it was only in memory).
         if state.userId == nil {
             let epoch = state.userEpochSequence

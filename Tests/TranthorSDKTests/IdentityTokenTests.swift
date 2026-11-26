@@ -135,7 +135,7 @@ final class IdentityTokenCacheTests: XCTestCase {
         XCTAssertNil(cache.fresh(for: "a", nowMs: now + 31_000, minValidityMs: 60_000), "less than 60 s left")
         XCTAssertNotNil(cache.fresh(for: "a", nowMs: now + 31_000, minValidityMs: 0))
         XCTAssertNil(cache.fresh(for: "a", nowMs: now + 91_000, minValidityMs: 0))
-        XCTAssertNotNil(cache.fresh(for: "a", nowMs: now + 91_000, minValidityMs: -tokenGraceMs), "the server accepts it until exp + 120 s")
+        XCTAssertNotNil(cache.fresh(for: "a", nowMs: now + 91_000, minValidityMs: -tokenGraceMs), "the server still accepts it shortly after it expires")
         XCTAssertNil(cache.fresh(for: "a", nowMs: now + 211_000, minValidityMs: -tokenGraceMs))
         XCTAssertEqual(cache.fresh(for: "b", nowMs: now + 9e12, minValidityMs: 60_000), "opaque-token")
         XCTAssertNil(cache.fresh(for: "c", nowMs: now, minValidityMs: 0), "a token is only returned for its own user")
@@ -226,7 +226,7 @@ final class IdentityTokenTests: XCTestCase {
         let root = root(), clock = FakeClock(), wire = Wire(), sleeper = Sleeper()
         let provider = Provider([])
         let sdk = try await sdk(root, wire, sleeper, clock, provider: provider)
-        let recent = clock.token("recent", expiresIn: -60)   // expired a minute ago: still accepted until exp + 120 s
+        let recent = clock.token("recent", expiresIn: -60)   // expired a minute ago: still accepted
         try await sdk.identify(userId: "recent", identityToken: recent)
         try await sdk.flush()
         var sent = await wire.sent
@@ -236,7 +236,7 @@ final class IdentityTokenTests: XCTestCase {
         try await sdk.track(event: "x")
         try await sdk.flush()
         sent = await wire.sent
-        XCTAssertEqual(sent[1].tokens, [], "past exp + 120 s it is withheld")
+        XCTAssertEqual(sent[1].tokens, [], "long after it expired it is withheld")
         await sdk.shutdown()
     }
 
@@ -381,7 +381,7 @@ final class IdentityTokenTests: XCTestCase {
         await sdk.shutdown()
     }
 
-    // 403 identity_not_verified
+    // A refused identity token
 
     func testARefusedTokenIsRenewedAndTheSameBatchSentOnceMoreWithoutSpendingARetry() async throws {
         let root = root(), clock = FakeClock(), sleeper = Sleeper()
@@ -506,7 +506,7 @@ final class IdentityTokenTests: XCTestCase {
         }
     }
 
-    // 503 identity unavailable
+    // Identity settings the server could not read
 
     func testAnIdentity503IsHeldForRetryAfterUpToFiveMinutesAndNeverSpendsARetry() async throws {
         let cases: [(Double, Double)] = [(120_000, 120_000), (400_000, 300_000), (0, 30_000), (200, 1_000)]
@@ -609,7 +609,7 @@ final class IdentityTokenTests: XCTestCase {
         XCTAssertTrue(try tokens(root).isEmpty, "gone from disk")
         await sdk.shutdown()
     }
-    func testStaleTokensAreEvictedAtLaunchAndPastTheGrace() async throws {
+    func testStaleTokensAreEvictedAtLaunchAndLongAfterTheyExpire() async throws {
         let root = root(), clock = FakeClock(), sleeper = Sleeper()
         let first = try await sdk(root, Wire(), sleeper, clock)
         try await first.identify(userId: "a", identityToken: clock.token("a", expiresIn: 10))
@@ -622,9 +622,9 @@ final class IdentityTokenTests: XCTestCase {
         stored["ghost"] = clock.token("ghost", expiresIn: 3600)
         object["identityTokens"] = stored
         try JSONSerialization.data(withJSONObject: object).write(to: file)
-        clock.advance(seconds: 200)   // a's token is now past exp + 120 s
+        clock.advance(seconds: 200)   // a's token expired long ago
         let second = try await sdk(root, Wire(), sleeper, clock)
-        XCTAssertTrue(try tokens(root).isEmpty, "the ghost has no events and no user, a's token is past its grace")
+        XCTAssertTrue(try tokens(root).isEmpty, "the ghost has no events and no user, and a's token expired long ago")
         await second.shutdown()
     }
     func testAPreviousUsersRemovalIsRetriedThroughTheProviderAndNeverDroppedForLackOfAToken() async throws {
@@ -766,6 +766,8 @@ final class IdentityTokenTests: XCTestCase {
         await sdk.endHold()
         let parked = await sdk.removalIsParked
         XCTAssertFalse(parked, "the removal is no longer rejected with no timer left")
+        let timer = await sdk.pendingTimer
+        XCTAssertNotNil(timer, "and automatic delivery is armed again, as when the hold's own timer ends it")
         await sdk.shutdown()
     }
     private func removal(_ user: String, _ id: String) -> JSONValue {
@@ -857,6 +859,70 @@ final class IdentityTokenTests: XCTestCase {
         try await sdk.identify(userId: "a", identityToken: clock.token("a", expiresIn: 3600))
         await sdk.shutdown()
         XCTAssertTrue(reports.errors.filter { $0.attempts == 0 }.isEmpty, "nothing was dropped for the held limit")
+    }
+
+    // Review: removals without identity in use, and a stale restart marker
+
+    func testARemovalIsKeptWhenIdentityIsNotInUse() async throws {
+        for useReset in [false, true] {
+            let root = root(), clock = FakeClock(), sleeper = Sleeper(), reports = Reports()
+            let wire = Wire([.success(ResponseNotes()), .failure(refused(["a"], reason: "missing"))])
+            let sdk = try await sdk(root, wire, sleeper, clock, reports: reports)   // no provider, no token ever supplied
+            try await sdk.identify(userId: "a")
+            try await sdk.registerInstallation(token: "apns-token", appId: "com.example.app", environment: .development, permission: .granted)
+            try await sdk.flush()
+            if useReset { try await sdk.reset(); _ = await flushFails(sdk) } else { try await sdk.optOut() }
+            for _ in 0..<5000 where !(await sdk.held) { try await Task.sleep(for: .milliseconds(1)) }
+            let held = await sdk.held
+            XCTAssertTrue(held, "a refused removal is parked, not dropped")
+            XCTAssertTrue(reports.errors.isEmpty, "nothing was given up")
+            XCTAssertEqual(reports.notices.map(\.kind), [.identityRefused])
+            let state = try loadState(directory: root, namespace: "default")
+            XCTAssertEqual(state.pendingRemovals.count + state.queued.filter { $0["event"]?.string == "Installation Removed" }.count, 1)
+            // The server accepts it later.
+            try await sleeper.fire(60_000)
+            for _ in 0..<5000 {
+                let current = try loadState(directory: root, namespace: "default")
+                if current.pendingRemovals.isEmpty && current.queued.isEmpty { break }
+                try await Task.sleep(for: .milliseconds(1))
+            }
+            let after = try loadState(directory: root, namespace: "default")
+            XCTAssertTrue(after.pendingRemovals.isEmpty && after.queued.isEmpty, "delivered once the server accepts it")
+            await sdk.shutdown()
+        }
+    }
+    func testTheRestartMarkerSurvivesADrainedQueueAndRelaunches() async throws {
+        let root = root(), clock = FakeClock(), sleeper = Sleeper(), reports = Reports()
+        let first = try await sdk(root, Wire(), sleeper, clock, provider: Provider([]))
+        try await first.track(event: "x", userId: "a")
+        try await first.reset()
+        try await first.flush()   // the queue is empty
+        await first.shutdown()
+        let second = try await sdk(root, Wire(), sleeper, clock, provider: Provider([]))
+        await second.shutdown()
+        let third = try await sdk(root, Wire(), sleeper, clock, provider: Provider([]))
+        try await third.track(event: "y", userId: "a")   // after the reset: a is the first user seen again
+        await third.shutdown()
+        let wire = Wire([.failure(refused(["a"], reason: "missing"))])
+        let fourth = try await sdk(root, wire, sleeper, clock, provider: Provider([]), reports: reports)
+        _ = await flushFails(fourth)
+        XCTAssertEqual(try loadState(directory: root, namespace: "default").queued.count, 1, "held, not dropped as a previous user's")
+        XCTAssertTrue(reports.errors.isEmpty)
+        await fourth.shutdown()
+    }
+    func testASalvagedStateDoesNotMakeASignedOutUserCurrentAgain() async throws {
+        let root = root(), clock = FakeClock(), sleeper = Sleeper(), reports = Reports()
+        let first = try await sdk(root, Wire(), sleeper, clock, provider: Provider([]))
+        try await first.track(event: "x", userId: "a")
+        try await first.reset()
+        await first.shutdown()
+        try rewriteState(root) { $0.removeValue(forKey: "version") }   // damaged: salvaged
+        let wire = Wire([.failure(refused(["a"], reason: "missing"))])
+        let second = try await sdk(root, wire, sleeper, clock, provider: Provider([]), reports: reports)
+        _ = await flushFails(second)
+        XCTAssertTrue(try loadState(directory: root, namespace: "default").queued.isEmpty, "a signed out before the damage: their event is a previous user's")
+        XCTAssertEqual(reports.errors.count, 1)
+        await second.shutdown()
     }
     private func waitForRequests(_ wire: Wire, _ count: Int) async throws {
         for _ in 0..<5000 {
