@@ -1,0 +1,80 @@
+{
+  "id": "identity-token-403-renews-and-retries",
+  "description": "On 403 identity_not_verified the SDK drops the refused token, renews it through the provider and retries the same batch exactly once: no third request follows.",
+  "capabilities": [
+    "core",
+    "transport",
+    "identity-token"
+  ],
+  "config": {
+    "writeKey": "Basic MDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAwOmNvbmZvcm1hbmNl",
+    "identity": {
+      "provider": [
+        {
+          "result": "token",
+          "ref": "t2",
+          "sub": "user-1",
+          "ttlSeconds": 3600
+        }
+      ]
+    }
+  },
+  "server": {
+    "responses": [],
+    "identity": {
+      "mode": "required"
+    }
+  },
+  "steps": [
+    {
+      "op": "emit",
+      "call": "a",
+      "method": "identify",
+      "data": {
+        "userId": "user-1"
+      },
+      "identityToken": {
+        "ref": "t1",
+        "sub": "user-1",
+        "ttlSeconds": 3600,
+        "valid": false
+      }
+    },
+    {
+      "op": "flush",
+      "rejected": false
+    },
+    {
+      "op": "assert",
+      "expect": {
+        "errors": [],
+        "requests": [
+          {
+            "batch": [
+              {
+                "call": "a"
+              }
+            ],
+            "identityTokens": [
+              "t1"
+            ]
+          },
+          {
+            "batch": [
+              {
+                "call": "a"
+              }
+            ],
+            "identityTokens": [
+              "t2"
+            ]
+          }
+        ],
+        "providerCalls": [
+          "user-1"
+        ]
+      },
+      "observeMs": 500
+    }
+  ]
+}

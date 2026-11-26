@@ -35,6 +35,7 @@ targets:
       - ../Tests/ConformanceTests/Runner.swift
       - ../Tests/ConformanceTests/Schema.swift
       - ../Tests/ConformanceTests/Declaration.swift
+      - ../Tests/ConformanceTests/IdentityScript.swift
       - ../Tests/ConformanceTests/LifecycleNotificationTests.swift
       - path: ../Tests/ConformanceTests/Fixtures
         type: folder

@@ -1,0 +1,83 @@
+{
+  "id": "identity-token-refusal-without-user-backs-off",
+  "description": "A 403 identity_not_verified for a batch with no user id to act on is a failed send with the normal retry backoff, not a tight loop; the SDK reports it.",
+  "capabilities": [
+    "core",
+    "transport",
+    "identity-token"
+  ],
+  "config": {
+    "writeKey": "Basic MDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAwOmNvbmZvcm1hbmNl",
+    "flushIntervalMs": 50,
+    "baseDelay": 300,
+    "retries": 2,
+    "identity": {
+      "provider": []
+    }
+  },
+  "server": {
+    "responses": [
+      {
+        "status": 403,
+        "body": {
+          "code": "identity_not_verified",
+          "message": "Identity token missing or invalid for 1 user.",
+          "reason": "missing",
+          "userIds": [
+            "user-1"
+          ]
+        }
+      },
+      {
+        "status": 204
+      }
+    ]
+  },
+  "steps": [
+    {
+      "op": "emit",
+      "call": "a",
+      "method": "track",
+      "data": {
+        "anonymousId": "anonymous-1",
+        "event": "event-a"
+      }
+    },
+    {
+      "op": "assert",
+      "expect": {
+        "requests": [
+          {
+            "batch": [
+              {
+                "call": "a"
+              }
+            ]
+          },
+          {
+            "batch": [
+              {
+                "call": "a"
+              }
+            ]
+          }
+        ],
+        "errors": [],
+        "notices": [
+          {
+            "kind": "identity-refused",
+            "reason": "missing"
+          }
+        ],
+        "delays": [
+          {
+            "from": 0,
+            "to": 1,
+            "minMs": 270,
+            "maxMs": 1500
+          }
+        ]
+      }
+    }
+  ]
+}

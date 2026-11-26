@@ -29,10 +29,10 @@ final class ConformanceTests: XCTestCase {
             try require(ids.insert(id).inserted, "Duplicate scenario ID")
         }
         #if canImport(UIKit)
-        let capabilities = ["core", "transport", "persistence", "lifecycle", "consent", "identity-link", "durable-queue"]
+        let capabilities = ["core", "transport", "persistence", "lifecycle", "consent", "identity-link", "durable-queue", "identity-token", "app-id"]
         let lifecycle: J = "os-hook"
         #else
-        let capabilities = ["core", "transport", "persistence", "consent", "identity-link", "durable-queue"]
+        let capabilities = ["core", "transport", "persistence", "consent", "identity-link", "durable-queue", "identity-token", "app-id"]
         let lifecycle: J = .null
         #endif
         let name = "TranthorSDK Swift XCTest"

@@ -29,6 +29,24 @@ public struct Configuration: Sendable {
     public let maxQueueSize: Int
     /// Called when the server rejects a batch, or when events are dropped for lack of room. Not called when retries run out: those events are kept and sent later. Optional.
     public let onError: (@Sendable (BatchFailure) -> Void)?
+    /// Supplies a fresh identity token for a user, or nil when there is none. Called with the user ID when the current
+    /// user's cached token is missing or has less than 60 seconds left, and again after the server refuses a token.
+    /// The token is a JWT your own backend signs for that user ID; the SDK never verifies it and never logs it. Throwing
+    /// or returning nil means "no token for this user": the batch is still sent with the tokens the SDK has, and the
+    /// provider is not called again for 60 seconds, and a batch held for lack of a token waits that long. Optional.
+    public let identityTokenProvider: (@Sendable (String) async throws -> String?)?
+    /// The app ID sent with every request. Default: the app's bundle identifier. An empty value uses the default. Nil
+    /// when the app has no bundle identifier and none was given, and then no app ID is sent.
+    public let appId: String?
+    /// Milliseconds a batch waits for `identityTokenProvider` before it is sent anyway. Default 20,000. Not public API:
+    /// tests set it. Anything that is not a number above 0 keeps the previous value.
+    @_spi(Testing) public var identityProviderTimeoutMs: Double = 20_000 { didSet { if !(identityProviderTimeoutMs.isFinite && identityProviderTimeoutMs > 0) { identityProviderTimeoutMs = oldValue } } }
+    /// Milliseconds after a provider failure before it is called again, and how long a batch held for lack of a token
+    /// waits. Default 60,000. Test-only (SPI "Testing"), not public API.
+    @_spi(Testing) public var identityProviderBackoffMs: Double = 60_000 { didSet { if !(identityProviderBackoffMs.isFinite && identityProviderBackoffMs > 0) { identityProviderBackoffMs = oldValue } } }
+    /// Called with a diagnostic that is not an error: events the server dropped or could not verify, an identity token
+    /// it refused, or identity settings it could not read. Nothing it carries is a token or a user ID. Optional.
+    public let onNotice: (@Sendable (Notice) -> Void)?
 
     /// Creates a configuration. The numeric options take a `Double` so a value from JSON or a remote setting needs no
     /// conversion; see each property for how an unusable value is handled.
@@ -37,7 +55,10 @@ public struct Configuration: Sendable {
                 retries: Double? = nil, baseDelay: Double? = nil,
                 automaticContext: Bool = true, storageNamespace: String = "default",
                 storageDirectory: URL? = nil, maxQueueSize: Int = 10_000,
-                onError: (@Sendable (BatchFailure) -> Void)? = nil) {
+                onError: (@Sendable (BatchFailure) -> Void)? = nil,
+                identityTokenProvider: (@Sendable (String) async throws -> String?)? = nil,
+                appId: String? = nil,
+                onNotice: (@Sendable (Notice) -> Void)? = nil) {
         self.writeKey = writeKey
         self.host = host
         self.batchSize = Self.positiveInteger(batchSize, fallback: 5)
@@ -49,6 +70,9 @@ public struct Configuration: Sendable {
         self.storageDirectory = storageDirectory
         self.maxQueueSize = maxQueueSize > 0 ? maxQueueSize : 10_000
         self.onError = onError
+        self.identityTokenProvider = identityTokenProvider
+        self.appId = appId.flatMap { $0.isEmpty ? nil : $0 } ?? Bundle.main.bundleIdentifier
+        self.onNotice = onNotice
     }
 
     /// The same options, taking integer values. A call with no numeric option uses the `Double` initializer.
@@ -57,12 +81,17 @@ public struct Configuration: Sendable {
                 retries: N? = nil, baseDelay: N? = nil,
                 automaticContext: Bool = true, storageNamespace: String = "default",
                 storageDirectory: URL? = nil, maxQueueSize: Int = 10_000,
-                onError: (@Sendable (BatchFailure) -> Void)? = nil) {
+                onError: (@Sendable (BatchFailure) -> Void)? = nil,
+                identityTokenProvider: (@Sendable (String) async throws -> String?)? = nil,
+                appId: String? = nil,
+                onNotice: (@Sendable (Notice) -> Void)? = nil) {
         self.init(writeKey: writeKey, host: host,
                   batchSize: batchSize.map { Double($0) }, flushIntervalMs: flushIntervalMs.map { Double($0) },
                   retries: retries.map { Double($0) }, baseDelay: baseDelay.map { Double($0) },
                   automaticContext: automaticContext, storageNamespace: storageNamespace,
-                  storageDirectory: storageDirectory, maxQueueSize: maxQueueSize, onError: onError)
+                  storageDirectory: storageDirectory, maxQueueSize: maxQueueSize, onError: onError,
+                  identityTokenProvider: identityTokenProvider, appId: appId,
+                  onNotice: onNotice)
     }
 
     private static func positiveInteger(_ v: Double?, fallback: Int) -> Int {
@@ -81,15 +110,61 @@ public struct DeliveryFailure: Error, Sendable, Equatable {
     public let status: Int?
     /// A short description. It never contains the write key or event data.
     public let message: String
-    /// How long the server asked to wait before retrying (`Retry-After`), in milliseconds; 0 if it did not.
+    /// How long the server asked to wait before retrying, in milliseconds; 0 if it did not.
     public let retryAfterMs: Double
+    /// The machine-readable code the server gave for a refusal of an identity token or of the write key, or for
+    /// identity settings it could not read. Nil for any other failure, and when the server gave none.
+    public let code: String?
+    /// The user IDs the server named when it refused their identity tokens, when it named any.
+    public let userIds: [String]?
+    /// Why the server refused an identity token (`missing`, `signature`, `expired`, `lifetime`, `audience`...), when it
+    /// said. The list is open: `missing`, `malformed`, `unknown_key`, `signature`, `expired`, `not_yet_valid`, `lifetime`,
+    /// `audience`, `workspace`. Renewing cannot fix `lifetime`, `malformed`, `audience`, `workspace`, `unknown_key` or
+    /// `signature`: those are a fault in the code that signs tokens.
+    public let reason: String?
     /// Creates a failure, for example to test an `onError` handler.
-    public init(status: Int?, message: String, retryAfterMs: Double = 0) {
+    public init(status: Int?, message: String, retryAfterMs: Double = 0, code: String? = nil, userIds: [String]? = nil,
+                reason: String? = nil) {
+        self.reason = reason
         self.status = status
         self.message = message
         self.retryAfterMs = retryAfterMs
+        self.code = code
+        self.userIds = userIds
     }
     var retryable: Bool { status == nil || status == 408 || status == 425 || status == 429 || (500...599).contains(status ?? 0) }
+}
+
+/// A diagnostic from the SDK that is not an error: nothing failed for good. It never contains a token or a user ID.
+public struct Notice: Sendable, Equatable {
+    /// What happened.
+    public enum Kind: String, Sendable {
+        /// The server answered 2xx but dropped events. `count` says how many. In Required mode this includes anonymous
+        /// events that could change a customer: register push and send traits after sign-in.
+        case eventsDropped = "events-dropped"
+        /// The server accepted events that had no valid identity token (monitor mode). `count` says how many.
+        case eventsUnverified = "events-unverified"
+        /// The server refused an identity token and the SDK holds the batch, or could not renew. `reason` is the
+        /// server's word for it. `lifetime`, `malformed`, `audience`, `workspace`, `unknown_key` and `signature` are a
+        /// fault in the code that signs tokens; renewing cannot fix them.
+        case identityRefused = "identity-refused"
+        /// The server could not read its identity settings. The batch is kept and sent again later.
+        case identityUnavailable = "identity-unavailable"
+    }
+    public let kind: Kind
+    /// How many events, for the two `events-` kinds.
+    public let count: Int?
+    /// The server's reason for refusing a token, for `identityRefused`, when it gave one.
+    public let reason: String?
+    /// A short description for a developer.
+    public let message: String
+    /// Creates a notice, for example to test an `onNotice` handler.
+    public init(kind: Kind, count: Int? = nil, reason: String? = nil, message: String) {
+        self.kind = kind
+        self.count = count
+        self.reason = reason
+        self.message = message
+    }
 }
 
 /// A batch of events that was not delivered, passed to `Configuration.onError`.
@@ -109,12 +184,17 @@ public struct BatchFailure: Sendable {
 }
 
 /// Only ASCII RFC 9110 delay-seconds; saturate huge values at the policy cap.
-func retryAfter(_ value: String?) -> Double {
-    guard let value, !value.isEmpty, value.utf8.allSatisfy({ (48...57).contains($0) }) else { return 0 }
+func retryAfter(_ value: String?, capSeconds: Double = 30) -> Double {
+    guard let value, value.isASCIIDigits else { return 0 }
     var seconds = 0.0
-    for digit in value.utf8 { seconds = min(30, seconds * 10 + Double(digit - 48)) }
+    for digit in value.utf8 { seconds = min(capSeconds, seconds * 10 + Double(digit - 48)) }
     return seconds * 1000
 }
 func retryDelay(base: Double, attempt: Int, requested: Double) -> Double {
     min(30000, max(base == 0 ? 0 : base * pow(2, Double(attempt)), requested))
+}
+
+extension String {
+    /// Non-empty and only ASCII digits: the form of an HTTP delay in seconds and of a count in a header.
+    var isASCIIDigits: Bool { !isEmpty && utf8.allSatisfy { (48...57).contains($0) } }
 }

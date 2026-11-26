@@ -1,4 +1,5 @@
 const http = require("node:http");
+const { MODES, mintToken, judge } = require("./identity.cjs");
 
 const BATCH_PATH = "/api/public/apps/batch";
 const MAX_BODY_BYTES = 1024 * 1024;
@@ -6,8 +7,9 @@ const MAX_BODY_BYTES = 1024 * 1024;
 function validScript(script) {
   return Array.isArray(script) && script.every((entry) => {
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) return false;
-    if (Object.keys(entry).some((key) => !["status", "delayMs", "retryAfter", "location", "drop"].includes(key))) return false;
+    if (Object.keys(entry).some((key) => !["status", "delayMs", "retryAfter", "location", "drop", "body"].includes(key))) return false;
     if (entry.drop !== undefined && typeof entry.drop !== "boolean") return false;
+    if (entry.body !== undefined && (entry.body === null || typeof entry.body !== "object" || Array.isArray(entry.body))) return false;
     if (entry.status !== undefined && (!Number.isInteger(entry.status) || entry.status < 200 || entry.status > 599)) return false;
     if (entry.delayMs !== undefined && (!Number.isInteger(entry.delayMs) || entry.delayMs < 0 || entry.delayMs > 30000)) return false;
     if (entry.retryAfter !== undefined && (typeof entry.retryAfter !== "string" || !/^[\x20-\x7e]*$(?![\s\S])/.test(entry.retryAfter) || !/^[0-9]+$(?![\s\S])/.test(entry.retryAfter))) return false;
@@ -38,6 +40,7 @@ function createMockServer() {
   let script = [];
   let cursor = 0;
   let generation = 0;
+  let identityMode = "off";
   const delayed = new Map();
   const json = (response, status, body) => {
     response.writeHead(status, { "Content-Type": "application/json" });
@@ -65,7 +68,26 @@ function createMockServer() {
         requests = [];
         script = [];
         cursor = 0;
+        identityMode = "off";
         return json(response, 200, { ok: true });
+      }
+      if (request.method === "POST" && path === "/control/identity") {
+        const body = await readJson(request);
+        if (!body || Object.keys(body).length !== 1 || !MODES.includes(body.mode)) {
+          return json(response, 400, { error: `Expected { mode: ${MODES.join(" | ")} }` });
+        }
+        identityMode = body.mode;
+        return json(response, 200, { ok: true });
+      }
+      if (request.method === "POST" && path === "/control/identity/token") {
+        const body = await readJson(request);
+        const keys = body && typeof body === "object" ? Object.keys(body) : [];
+        if (!keys.length || keys.some((key) => !["sub", "ttlSeconds", "valid"].includes(key)) ||
+            typeof body.sub !== "string" || !body.sub || !Number.isInteger(body.ttlSeconds) ||
+            (body.valid !== undefined && typeof body.valid !== "boolean")) {
+          return json(response, 400, { error: "Expected { sub: string, ttlSeconds: integer, valid?: boolean }" });
+        }
+        return json(response, 200, { token: mintToken(body) });
       }
       if (request.method === "POST" && path === "/control/script") {
         const body = await readJson(request);
@@ -80,7 +102,8 @@ function createMockServer() {
         return json(response, 200, { requests });
       }
       if (request.method === "POST" && path === BATCH_PATH) {
-        // Reserve script order at arrival, even if another body finishes reading first.
+        // Reserve script order at arrival, even if another body finishes reading first. A malformed or oversize
+        // body still consumes its entry; only the server's own identity verdict gives its entry back (below).
         const entry = script[cursor++] ?? { status: 204 };
         const record = {
           index: requests.length,
@@ -97,14 +120,26 @@ function createMockServer() {
           return json(response, 400, { error: error.message });
         }
         if (requestGeneration !== generation) return response.destroy();
+        const { verdict, extraHeaders, summary } = judge({ mode: identityMode, headers: request.headers, body: record.body });
+        if (identityMode !== "off") record.identity = summary;
+        // The verdict is the server's own answer, not a scripted one: it gives its reserved entry back. This is
+        // exact only with one request in flight, as the protocol requires. With two requests in flight the entry
+        // each one gets is undefined, and scenarios must not rely on it.
+        if (verdict) {
+          const index = script.indexOf(entry);
+          if (index === cursor - 1 || (index === -1 && cursor > script.length)) cursor--;
+          return json(response, verdict.status, verdict.body);
+        }
         const respond = () => {
           try {
             if (entry.drop) return request.socket.destroy();
             response.writeHead(entry.status, {
+              ...extraHeaders,
               ...(entry.retryAfter === undefined ? {} : { "Retry-After": entry.retryAfter }),
               ...(entry.location === undefined ? {} : { Location: entry.location }),
+              ...(entry.body === undefined ? {} : { "Content-Type": "application/json" }),
             });
-            response.end();
+            response.end(entry.body === undefined ? undefined : JSON.stringify(entry.body));
           } catch {
             // Also contain errors from delayed callbacks, outside the request handler.
             response.destroy();

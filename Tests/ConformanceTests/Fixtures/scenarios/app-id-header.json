@@ -1,0 +1,69 @@
+{
+  "id": "app-id-header",
+  "description": "The configured appId is sent as x-tranthor-app-id on every ingestion request.",
+  "capabilities": [
+    "core",
+    "transport",
+    "app-id"
+  ],
+  "config": {
+    "writeKey": "Basic MDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAwOmNvbmZvcm1hbmNl",
+    "batchSize": 1,
+    "appId": "com.example.app"
+  },
+  "server": {
+    "responses": []
+  },
+  "steps": [
+    {
+      "op": "emit",
+      "call": "a",
+      "method": "track",
+      "data": {
+        "userId": "user-1",
+        "event": "event-a"
+      }
+    },
+    {
+      "op": "emit",
+      "call": "b",
+      "method": "track",
+      "data": {
+        "userId": "user-1",
+        "event": "event-b"
+      }
+    },
+    {
+      "op": "flush",
+      "rejected": false
+    },
+    {
+      "op": "assert",
+      "expect": {
+        "errors": [],
+        "requests": [
+          {
+            "batch": [
+              {
+                "call": "a"
+              }
+            ],
+            "headers": {
+              "x-tranthor-app-id": "com.example.app"
+            }
+          },
+          {
+            "batch": [
+              {
+                "call": "b"
+              }
+            ],
+            "headers": {
+              "x-tranthor-app-id": "com.example.app"
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

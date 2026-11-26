@@ -1,0 +1,98 @@
+{
+  "id": "identity-token-removal-refused-twice-stays-queued",
+  "description": "An Installation Removed (properties platform, appId, environment and token, as the server parses it) that is refused and cannot be renewed is never dropped or reported as dropped: it stays queued and is sent again after each hold of the provider backoff, with a notice per failed attempt.",
+  "capabilities": [
+    "core",
+    "transport",
+    "identity-token"
+  ],
+  "config": {
+    "writeKey": "Basic MDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAwOmNvbmZvcm1hbmNl",
+    "flushIntervalMs": 50,
+    "identity": {
+      "providerBackoffMs": 500,
+      "provider": []
+    }
+  },
+  "server": {
+    "responses": [],
+    "identity": {
+      "mode": "required"
+    }
+  },
+  "steps": [
+    {
+      "op": "emit",
+      "call": "a",
+      "method": "track",
+      "data": {
+        "userId": "user-1",
+        "event": "Installation Removed",
+        "properties": {
+          "platform": "ios",
+          "appId": "com.example.app",
+          "environment": "production",
+          "token": "redacted-fixture"
+        }
+      }
+    },
+    {
+      "op": "assert",
+      "timeoutMs": 5000,
+      "expect": {
+        "requests": [
+          {
+            "batch": [
+              {
+                "call": "a"
+              }
+            ]
+          },
+          {
+            "batch": [
+              {
+                "call": "a"
+              }
+            ]
+          },
+          {
+            "batch": [
+              {
+                "call": "a"
+              }
+            ]
+          }
+        ],
+        "errors": [],
+        "notices": [
+          {
+            "kind": "identity-refused",
+            "reason": "missing"
+          },
+          {
+            "kind": "identity-refused",
+            "reason": "missing"
+          },
+          {
+            "kind": "identity-refused",
+            "reason": "missing"
+          }
+        ],
+        "delays": [
+          {
+            "from": 0,
+            "to": 1,
+            "minMs": 480,
+            "maxMs": 1500
+          },
+          {
+            "from": 1,
+            "to": 2,
+            "minMs": 480,
+            "maxMs": 1500
+          }
+        ]
+      }
+    }
+  ]
+}

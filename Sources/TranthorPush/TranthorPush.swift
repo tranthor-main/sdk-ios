@@ -29,6 +29,11 @@ public actor TranthorPush {
     /// `reset`, `optOut` and `optIn` on the SDK keep the registration in step. Registers the `TRANTHOR_PUSH`
     /// category next to your own; register your categories before creating this instance. Retain the instance.
     ///
+    /// If the workspace requires verified identity, register push only after sign-in: call
+    /// ``TranthorSDK/identify(userId:identityToken:anonymousId:traits:messageId:timestamp:context:)`` first. The server drops an
+    /// anonymous registration and anonymous push interaction events without an error; the SDK reports the count through
+    /// ``TranthorSDK/Configuration/onNotice``.
+    ///
     /// - Throws: ``PushError/invalidBundleIdentifier`` when the configuration's bundle identifier is malformed.
     public init(configuration: PushConfiguration, sdk: TranthorSDK) async throws {
         try await self.init(configuration: configuration, sdk: sdk, permission: { await PushAuthorization.currentState() },
@@ -122,7 +127,8 @@ public actor TranthorPush {
     }
 
     /// Hands over the APNs device token. Call it from `application(_:didRegisterForRemoteNotificationsWithDeviceToken:)`
-    /// on every launch. It is registered once a customer is signed in.
+    /// on every launch. It is registered once a customer is signed in, which is also what a workspace that requires
+    /// verified identity needs: an anonymous registration would be dropped by the server.
     public func registerDeviceToken(_ data: Data) async throws {
         guard !stopped else { throw PushError.shutDown }
         guard !data.isEmpty else { throw PushError.emptyDeviceToken }

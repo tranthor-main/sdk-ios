@@ -19,10 +19,18 @@ struct StoredState: Codable, Sendable {
     var installation: StoredInstallation?
     /// `Installation Removed` events an opt-out still has to deliver. Delivered even while opted out.
     var pendingRemovals: [[String: JSONValue]] = []
+    /// The identity tokens of the users with events here, written with the state and so protected like the queue. Not the
+    /// Keychain: a reinstall must not bring an old token back.
+    var identityTokens = IdentityTokenCache()
+    /// An identity token has been handed over through `identify`. Never cleared: it decides whether a refusal holds a batch.
+    var identityTokenSupplied = false
+    /// The sequence number from which queued events count when the current user is worked out after a restart: `reset()`
+    /// moves it past the events it left behind, so the outgoing user does not become the current user again.
+    var userEpochSequence: UInt64 = 0
 
     init() {}
 
-    private enum CodingKeys: String, CodingKey { case version, anonymousId, userId, optedOut, installation, pendingRemovals }
+    private enum CodingKeys: String, CodingKey { case version, anonymousId, userId, optedOut, installation, pendingRemovals, identityTokens, identityTokenSupplied, userEpochSequence }
     init(from decoder: any Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         let version = try values.decode(Int.self, forKey: .version)
@@ -39,6 +47,11 @@ struct StoredState: Codable, Sendable {
         // Damage to these optional fields must not cost the identity or the queue.
         installation = try? values.decodeIfPresent(StoredInstallation.self, forKey: .installation)
         pendingRemovals = (try? values.decodeIfPresent([[String: JSONValue]].self, forKey: .pendingRemovals)) ?? []
+        // A state written before identity tokens, or a damaged cache, starts with an empty one. The provider refills it.
+        identityTokens = (try? values.decodeIfPresent(IdentityTokenCache.self, forKey: .identityTokens)) ?? IdentityTokenCache()
+        // Damage to the flag alone must not turn identity off while tokens are cached.
+        identityTokenSupplied = (try? values.decodeIfPresent(Bool.self, forKey: .identityTokenSupplied)) ?? !identityTokens.isEmpty
+        userEpochSequence = (try? values.decodeIfPresent(UInt64.self, forKey: .userEpochSequence)) ?? 0
     }
 }
 
@@ -78,6 +91,9 @@ struct StoredInstallation: Codable, Sendable, Equatable {
     var environment: String
     var permission: String
 }
+
+/// Only the restart marker of a state file, for salvaging it from a file that cannot be decoded as a whole.
+private struct EpochMarker: Decodable { let userEpochSequence: UInt64? }
 
 struct JSONStore: Sendable {
     let url: URL
@@ -290,6 +306,11 @@ struct JSONStore: Sendable {
         if let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
             if let anonymous = object["anonymousId"] as? String, UUID(uuidString: anonymous) != nil { result.anonymousId = anonymous }
             result.userId = object["userId"] as? String
+            // The flag decides whether a refusal holds a batch, so it is kept with the identity.
+            if let supplied = object["identityTokenSupplied"] as? Bool { result.identityTokenSupplied = supplied }
+            // So does the point from which queued events name the current user: a signed-out user stays signed out.
+            // Read as the normal decode reads it: a negative or fractional value is no marker, and means 0.
+            result.userEpochSequence = (try? JSONDecoder().decode(EpochMarker.self, from: data))?.userEpochSequence ?? 0
         }
         return result
     }

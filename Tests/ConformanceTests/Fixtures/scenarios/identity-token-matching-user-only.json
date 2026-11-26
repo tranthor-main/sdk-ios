@@ -1,0 +1,70 @@
+{
+  "id": "identity-token-matching-user-only",
+  "description": "A token is attached only for the user it was issued for; a batch of another user carries none.",
+  "capabilities": [
+    "core",
+    "transport",
+    "identity-token"
+  ],
+  "config": {
+    "writeKey": "Basic MDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAwOmNvbmZvcm1hbmNl",
+    "batchSize": 1
+  },
+  "server": {
+    "responses": []
+  },
+  "steps": [
+    {
+      "op": "emit",
+      "call": "a",
+      "method": "identify",
+      "data": {
+        "userId": "user-1"
+      },
+      "identityToken": {
+        "ref": "t1",
+        "sub": "user-1",
+        "ttlSeconds": 3600
+      }
+    },
+    {
+      "op": "emit",
+      "call": "b",
+      "method": "track",
+      "data": {
+        "userId": "user-2",
+        "event": "event-b"
+      }
+    },
+    {
+      "op": "flush",
+      "rejected": false
+    },
+    {
+      "op": "assert",
+      "expect": {
+        "errors": [],
+        "requests": [
+          {
+            "batch": [
+              {
+                "call": "a"
+              }
+            ],
+            "identityTokens": [
+              "t1"
+            ]
+          },
+          {
+            "batch": [
+              {
+                "call": "b"
+              }
+            ],
+            "identityTokens": []
+          }
+        ]
+      }
+    }
+  ]
+}

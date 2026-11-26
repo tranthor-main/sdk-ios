@@ -1,0 +1,55 @@
+{
+  "id": "identity-token-monitor-unverified-is-surfaced",
+  "description": "In Monitor the server counts events that would fail in x-tranthor-unverified-events; the SDK reports one notice per response.",
+  "capabilities": [
+    "core",
+    "transport",
+    "identity-token"
+  ],
+  "config": {
+    "writeKey": "Basic MDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAwOmNvbmZvcm1hbmNl",
+    "batchSize": 1
+  },
+  "server": {
+    "responses": [],
+    "identity": {
+      "mode": "monitor"
+    }
+  },
+  "steps": [
+    {
+      "op": "emit",
+      "call": "a",
+      "method": "track",
+      "data": {
+        "userId": "user-1",
+        "event": "event-a"
+      }
+    },
+    {
+      "op": "flush",
+      "rejected": false
+    },
+    {
+      "op": "assert",
+      "expect": {
+        "requests": [
+          {
+            "batch": [
+              {
+                "call": "a"
+              }
+            ]
+          }
+        ],
+        "errors": [],
+        "notices": [
+          {
+            "kind": "events-unverified",
+            "count": 1
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,61 @@
+{
+  "id": "identity-token-provider-timeout",
+  "description": "A provider that never answers delays the first batch by its timeout and no longer; the batch is still sent.",
+  "capabilities": [
+    "core",
+    "transport",
+    "identity-token"
+  ],
+  "config": {
+    "writeKey": "Basic MDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAwOmNvbmZvcm1hbmNl",
+    "flushIntervalMs": 50,
+    "identity": {
+      "providerTimeoutMs": 400,
+      "provider": [
+        {
+          "result": "hang"
+        }
+      ]
+    }
+  },
+  "server": {
+    "responses": []
+  },
+  "steps": [
+    {
+      "op": "emit",
+      "call": "a",
+      "method": "identify",
+      "data": {
+        "userId": "user-1"
+      }
+    },
+    {
+      "op": "assert",
+      "expect": {
+        "errors": [],
+        "requests": [
+          {
+            "batch": [
+              {
+                "call": "a"
+              }
+            ],
+            "identityTokens": []
+          }
+        ],
+        "providerCalls": [
+          "user-1"
+        ],
+        "delays": [
+          {
+            "from": "a",
+            "to": 0,
+            "minMs": 430,
+            "maxMs": 1500
+          }
+        ]
+      }
+    }
+  ]
+}

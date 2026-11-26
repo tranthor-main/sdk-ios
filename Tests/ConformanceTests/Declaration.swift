@@ -29,7 +29,7 @@ struct Declaration {
     let lifecycleSource: String?
     let knownFailures: [KnownFailure]
     func validate(scenarios: [J], version: String) throws {
-        let allowed: Set<String> = ["core", "transport", "persistence", "lifecycle", "consent", "identity-link", "durable-queue"]
+        let allowed: Set<String> = ["core", "transport", "persistence", "lifecycle", "consent", "identity-link", "durable-queue", "identity-token", "app-id"]
         try require(!name.isEmpty && suiteVersion == version && !version.isEmpty, "Invalid declaration name/version")
         try require(Set(capabilities).isSubset(of: allowed) && Set(capabilities).count == capabilities.count, "Invalid capabilities")
         if let lifecycleSource { try require(["os-hook", "public-method"].contains(lifecycleSource), "Invalid lifecycle source") }

@@ -1,0 +1,232 @@
+{
+  "id": "identity-token-ten-users-per-request",
+  "description": "A request carries tokens for at most 10 users: the 11th user's events go in a following request, so no user is refused for lack of a token slot.",
+  "capabilities": [
+    "core",
+    "transport",
+    "identity-token"
+  ],
+  "config": {
+    "writeKey": "Basic MDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAwOmNvbmZvcm1hbmNl",
+    "batchSize": 11
+  },
+  "server": {
+    "responses": [],
+    "identity": {
+      "mode": "required"
+    }
+  },
+  "steps": [
+    {
+      "op": "emit",
+      "call": "u1",
+      "method": "identify",
+      "data": {
+        "userId": "user-1"
+      },
+      "identityToken": {
+        "ref": "t1",
+        "sub": "user-1",
+        "ttlSeconds": 3600
+      }
+    },
+    {
+      "op": "emit",
+      "call": "u2",
+      "method": "identify",
+      "data": {
+        "userId": "user-2"
+      },
+      "identityToken": {
+        "ref": "t2",
+        "sub": "user-2",
+        "ttlSeconds": 3600
+      }
+    },
+    {
+      "op": "emit",
+      "call": "u3",
+      "method": "identify",
+      "data": {
+        "userId": "user-3"
+      },
+      "identityToken": {
+        "ref": "t3",
+        "sub": "user-3",
+        "ttlSeconds": 3600
+      }
+    },
+    {
+      "op": "emit",
+      "call": "u4",
+      "method": "identify",
+      "data": {
+        "userId": "user-4"
+      },
+      "identityToken": {
+        "ref": "t4",
+        "sub": "user-4",
+        "ttlSeconds": 3600
+      }
+    },
+    {
+      "op": "emit",
+      "call": "u5",
+      "method": "identify",
+      "data": {
+        "userId": "user-5"
+      },
+      "identityToken": {
+        "ref": "t5",
+        "sub": "user-5",
+        "ttlSeconds": 3600
+      }
+    },
+    {
+      "op": "emit",
+      "call": "u6",
+      "method": "identify",
+      "data": {
+        "userId": "user-6"
+      },
+      "identityToken": {
+        "ref": "t6",
+        "sub": "user-6",
+        "ttlSeconds": 3600
+      }
+    },
+    {
+      "op": "emit",
+      "call": "u7",
+      "method": "identify",
+      "data": {
+        "userId": "user-7"
+      },
+      "identityToken": {
+        "ref": "t7",
+        "sub": "user-7",
+        "ttlSeconds": 3600
+      }
+    },
+    {
+      "op": "emit",
+      "call": "u8",
+      "method": "identify",
+      "data": {
+        "userId": "user-8"
+      },
+      "identityToken": {
+        "ref": "t8",
+        "sub": "user-8",
+        "ttlSeconds": 3600
+      }
+    },
+    {
+      "op": "emit",
+      "call": "u9",
+      "method": "identify",
+      "data": {
+        "userId": "user-9"
+      },
+      "identityToken": {
+        "ref": "t9",
+        "sub": "user-9",
+        "ttlSeconds": 3600
+      }
+    },
+    {
+      "op": "emit",
+      "call": "u10",
+      "method": "identify",
+      "data": {
+        "userId": "user-10"
+      },
+      "identityToken": {
+        "ref": "t10",
+        "sub": "user-10",
+        "ttlSeconds": 3600
+      }
+    },
+    {
+      "op": "emit",
+      "call": "u11",
+      "method": "identify",
+      "data": {
+        "userId": "user-11"
+      },
+      "identityToken": {
+        "ref": "t11",
+        "sub": "user-11",
+        "ttlSeconds": 3600
+      }
+    },
+    {
+      "op": "flush",
+      "rejected": false
+    },
+    {
+      "op": "assert",
+      "expect": {
+        "errors": [],
+        "requests": [
+          {
+            "batch": [
+              {
+                "call": "u1"
+              },
+              {
+                "call": "u2"
+              },
+              {
+                "call": "u3"
+              },
+              {
+                "call": "u4"
+              },
+              {
+                "call": "u5"
+              },
+              {
+                "call": "u6"
+              },
+              {
+                "call": "u7"
+              },
+              {
+                "call": "u8"
+              },
+              {
+                "call": "u9"
+              },
+              {
+                "call": "u10"
+              }
+            ],
+            "identityTokens": [
+              "t1",
+              "t2",
+              "t3",
+              "t4",
+              "t5",
+              "t6",
+              "t7",
+              "t8",
+              "t9",
+              "t10"
+            ]
+          },
+          {
+            "batch": [
+              {
+                "call": "u11"
+              }
+            ],
+            "identityTokens": [
+              "t11"
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

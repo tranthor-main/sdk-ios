@@ -26,7 +26,12 @@ scripts/test-example-simulator.sh   # example app model and UI tests in a simula
 
 ## Conformance suite
 
-The scenarios in `Tests/ConformanceTests/Fixtures` are the delivery contract: they pin batching, retries, persistence, consent and identity linking, and the runner fails if the SDK's requests differ. `conformance/PROTOCOL.md` is the specification and `conformance/server` is the dependency-free mock server. The runner validates every scenario against the schema, then checks each request the SDK makes. Do not edit scenarios or the schema by hand to make a change pass; open an issue if you think the contract is wrong.
+The scenarios in `Tests/ConformanceTests/Fixtures` are the delivery contract: they pin batching, retries, persistence, consent and identity linking, and the runner fails if the SDK's requests differ. `conformance/PROTOCOL.md` is the specification and `conformance/server` is the dependency-free mock server. The runner validates every scenario against the schema, then checks each request the SDK makes. Do not edit scenarios or the schema by hand to make a change pass; open an issue if you think the contract is wrong. To adopt a newer suite, take it from the shared conformance suite's release and:
+
+1. Replace the whole `Tests/ConformanceTests/Fixtures/scenarios` directory with the release's `scenarios`, so scenarios the new suite dropped do not keep running. Replace `scenario.schema.json` and `VERSION` beside it.
+2. Replace `conformance/PROTOCOL.md` and these files in `conformance/server`: `cli.cjs`, `index.cjs`, `identity.cjs`, `server.test.cjs` and `identity.test.cjs`.
+3. Remove ticket numbers and the names of private repositories from the copied text, as the existing files do.
+4. Run `scripts/test-unit.sh` and `scripts/test-host.sh`, and name the suite version in the commit message.
 
 Run one scenario while still validating all of them:
 

@@ -1,0 +1,66 @@
+{
+  "id": "identity-token-anonymous-drop-is-surfaced",
+  "description": "In Required the server drops anonymous events that could change a customer with a 204 and counts them in x-tranthor-dropped-events (a count that also covers oversized events in every mode); the SDK reports one neutral notice.",
+  "capabilities": [
+    "core",
+    "transport",
+    "identity-token"
+  ],
+  "config": {
+    "writeKey": "Basic MDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAwOmNvbmZvcm1hbmNl",
+    "batchSize": 2
+  },
+  "server": {
+    "responses": [],
+    "identity": {
+      "mode": "required"
+    }
+  },
+  "steps": [
+    {
+      "op": "emit",
+      "call": "a",
+      "method": "track",
+      "data": {
+        "anonymousId": "anonymous-1",
+        "event": "Installation Registered"
+      }
+    },
+    {
+      "op": "emit",
+      "call": "b",
+      "method": "page",
+      "data": {
+        "anonymousId": "anonymous-1"
+      }
+    },
+    {
+      "op": "flush",
+      "rejected": false
+    },
+    {
+      "op": "assert",
+      "expect": {
+        "requests": [
+          {
+            "batch": [
+              {
+                "call": "a"
+              },
+              {
+                "call": "b"
+              }
+            ]
+          }
+        ],
+        "errors": [],
+        "notices": [
+          {
+            "kind": "events-dropped",
+            "count": 1
+          }
+        ]
+      }
+    }
+  ]
+}

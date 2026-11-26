@@ -1,0 +1,99 @@
+{
+  "id": "identity-token-write-key-403s-are-terminal",
+  "description": "A 403 write_key_app_not_allowed or write_key_origin_not_allowed is a configuration error and stays terminal even while identity is in use: the batch is dropped and reported.",
+  "capabilities": [
+    "core",
+    "transport",
+    "identity-token"
+  ],
+  "config": {
+    "writeKey": "Basic MDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAwOmNvbmZvcm1hbmNl",
+    "batchSize": 1,
+    "identity": {
+      "provider": []
+    }
+  },
+  "server": {
+    "responses": [
+      {
+        "status": 403,
+        "body": {
+          "code": "write_key_app_not_allowed",
+          "message": "This write key is not allowed for this app."
+        }
+      },
+      {
+        "status": 403,
+        "body": {
+          "code": "write_key_origin_not_allowed",
+          "message": "This write key is not allowed for this origin."
+        }
+      }
+    ]
+  },
+  "steps": [
+    {
+      "op": "emit",
+      "call": "a",
+      "method": "track",
+      "data": {
+        "userId": "user-1",
+        "event": "event-a"
+      }
+    },
+    {
+      "op": "flush",
+      "rejected": true
+    },
+    {
+      "op": "emit",
+      "call": "b",
+      "method": "track",
+      "data": {
+        "userId": "user-1",
+        "event": "event-b"
+      }
+    },
+    {
+      "op": "flush",
+      "rejected": true
+    },
+    {
+      "op": "assert",
+      "expect": {
+        "errors": [
+          {
+            "attempts": 1,
+            "status": 403,
+            "eventCalls": [
+              "a"
+            ]
+          },
+          {
+            "attempts": 1,
+            "status": 403,
+            "eventCalls": [
+              "b"
+            ]
+          }
+        ],
+        "requests": [
+          {
+            "batch": [
+              {
+                "call": "a"
+              }
+            ]
+          },
+          {
+            "batch": [
+              {
+                "call": "b"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}
