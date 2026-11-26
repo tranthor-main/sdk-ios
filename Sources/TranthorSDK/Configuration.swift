@@ -112,8 +112,8 @@ public struct DeliveryFailure: Error, Sendable, Equatable {
     public let message: String
     /// How long the server asked to wait before retrying (`Retry-After`), in milliseconds; 0 if it did not.
     public let retryAfterMs: Double
-    /// The machine-readable `code` of the server's JSON error body, for example `identity_not_verified`; nil when
-    /// the response had none.
+    /// The machine-readable `code` of the server's JSON error body, for example `identity_not_verified`. Read only for
+    /// `403` and `503` responses; nil for any other status, and when the body had none.
     public let code: String?
     /// The user IDs a `403 identity_not_verified` named, when it named any.
     public let userIds: [String]?

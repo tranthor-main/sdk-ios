@@ -17,7 +17,7 @@ All notable changes to this project are documented here. The format follows
 ### Changed
 
 - `identify(userId:anonymousId:traits:messageId:timestamp:context:)` gained an `identityToken:` parameter after `userId:`. Calls that use argument labels are unaffected.
-- An app that never configures a token provider and never passes an identity token handles a refused batch exactly as before.
+- An app that never configures a token provider and never passes an identity token handles a refused token exactly as before. The one exception is the outage hold below, which applies to every app.
 - With tokens in use, a batch the server refuses for lack of a valid token for the current user is held instead of dropped, and at most 1,000 events are kept while it is held.
 - A batch the server turns away because it cannot read its identity settings is now kept and sent again after the delay the server asks for, for every app, whether or not it uses identity tokens: it is a server outage, never a reason to drop events.
 - A push `Installation Removed` is never dropped for lack of a token: each failed attempt is reported through `onNotice`, not `onError`, and it is tried again until it is delivered.

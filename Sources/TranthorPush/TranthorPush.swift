@@ -32,7 +32,7 @@ public actor TranthorPush {
     /// If the workspace requires verified identity, register push only after sign-in: call
     /// ``TranthorSDK/identify(userId:identityToken:anonymousId:traits:messageId:timestamp:context:)`` first. The server drops an
     /// anonymous registration and anonymous push interaction events without an error; the SDK reports the count through
-    /// ``Configuration/onNotice``.
+    /// ``TranthorSDK/Configuration/onNotice``.
     ///
     /// - Throws: ``PushError/invalidBundleIdentifier`` when the configuration's bundle identifier is malformed.
     public init(configuration: PushConfiguration, sdk: TranthorSDK) async throws {

@@ -9,7 +9,8 @@ import Foundation
 let maxUsersPerRequest = 10
 /// A token with less than this left is renewed through the provider before the batch is sent.
 let renewBelowMs = 60_000.0
-/// Why an identity 503 is held for `Retry-After`, bounded to this range, and for this long when it has none.
+/// How long an identity 503 is held: the server's `Retry-After`, bounded by the minimum and maximum below, and this
+/// long when it names none.
 let unavailableHoldDefaultMs = 30_000.0
 let unavailableHoldMinMs = 1_000.0
 /// The server's `Retry-After` on an identity 503 is honoured up to this long (generic retries cap it at 30 s).
@@ -20,8 +21,9 @@ let unavailableCodes: Set<String> = ["identity_settings_unavailable", "identity_
 /// 9999-12-31T23:59:59Z in seconds; anything beyond is not a real expiry.
 private let maxExpSeconds = 253_402_300_799.0
 
-/// Reads the `exp` claim (seconds since the epoch) from a JWT payload WITHOUT verifying the token. Use it to schedule a
-/// renewal and nothing else: it proves nothing about the token. Nil when the text is not a three-segment JWT with a
+/// Reads the `exp` claim (seconds since the epoch) from a JWT payload WITHOUT verifying the token. It is used to renew a
+/// token before it expires and to stop sending, and to remove, a token the server would no longer accept; it proves
+/// nothing about the token. Nil when the text is not a three-segment JWT with a
 /// JSON object payload and a numeric `exp`.
 func decodeJwtExp(_ token: String) -> Double? {
     let segments = token.split(separator: ".", omittingEmptySubsequences: false)
@@ -88,7 +90,8 @@ func itemUser(_ item: [String: JSONValue]) -> String? {
 /// The distinct user IDs of a batch, in the order they first appear.
 func distinctUsers(_ batch: [[String: JSONValue]]) -> [String] {
     var users: [String] = []
-    for item in batch { if let user = itemUser(item), !users.contains(user) { users.append(user) } }
+    var seen = Set<String>()
+    for item in batch { if let user = itemUser(item), seen.insert(user).inserted { users.append(user) } }
     return users
 }
 /// How many of the queued items the next request takes: at most `batchSize`, and, with `limitUsers` (identity tokens in
