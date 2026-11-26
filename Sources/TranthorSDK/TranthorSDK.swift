@@ -122,6 +122,8 @@ public actor TranthorSDK {
         lifecycle = await LifecycleObserver(sdk: self)
         #endif
         pendingDeletion = loaded.4
+        // Before anyone identified, the current user is the first one a queued event names (it was only in memory).
+        if state.userId == nil { observedUser = queue.events.lazy.compactMap { itemUser($0.event) }.first }
         // Tokens left by an earlier run: keep only what the queue, the removals and the current user need, and what the
         // server would still accept.
         if pruneTokens() { persistDeliveryState() }
@@ -196,7 +198,6 @@ public actor TranthorSDK {
         }
         // A new token, or a new user, ends a hold: there is something new to try.
         let endsHold = held && user != nil && ((identityToken?.isEmpty == false) || user != previousUserId)
-        if endsHold { endHold() }
         var data = payload(userId: user, anonymousId: anonymousId ?? (user != nil ? state.anonymousId : nil),
                            messageId: messageId, timestamp: timestamp, context: context)
         if let traits { data["traits"] = .object(traits) }
@@ -213,7 +214,8 @@ public actor TranthorSDK {
             if registration != nil { sentInstallation = fingerprint }
             // Signing the same user in again registers the phone anew, which supersedes a removal still waiting for them.
             if let user, let registration, let target = Self.installationTarget(registration) { supersedeRemovals(target: target, user: user) }
-            if endsHold { beginCycle() }
+            // Only once the event is stored: a failed write leaves the hold, and its retry, as they were.
+            if endsHold { endHold(); beginCycle() }
         } catch { state.userId = previousUserId; state.anonymousId = previousAnonymousId; state.identityTokens = previousTokens; state.identityTokenSupplied = previousSupplied; throw error }
     }
     /// Queues an event with a name and optional properties. Ignored while opted out.
@@ -273,8 +275,9 @@ public actor TranthorSDK {
                 events: Self.redactingToken([item]), attempts: 0))
             throw error
         }
-        if state.userId == nil, observedUser == nil, let user = itemUser(item) { observedUser = user }
         try admit([item] + extra, savingState: savingState)
+        // Only once the event is stored, so a failed write does not make its user the current one.
+        if state.userId == nil, observedUser == nil, let user = itemUser(item) { observedUser = user }
     }
     /// Appends items as event files, dropping the oldest ordinary events if the queue is over capacity. The batch in
     /// flight is never dropped. An `Installation Registered/Removed` goes last: it is dropped only when nothing else
@@ -314,7 +317,7 @@ public actor TranthorSDK {
     }
     /// While a batch is held the queue keeps at most this many events; the oldest are dropped and reported.
     static let heldQueueLimit = 1000
-    private static func overflowIndex(_ queue: [[String: JSONValue]]) -> Int {
+    static func overflowIndex(_ queue: [[String: JSONValue]]) -> Int {
         if let ordinary = queue.firstIndex(where: { installationTarget($0) == nil }) { return ordinary }
         for index in queue.indices {
             let target = installationTarget(queue[index])

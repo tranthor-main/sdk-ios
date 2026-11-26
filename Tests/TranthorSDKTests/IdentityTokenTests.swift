@@ -729,6 +729,110 @@ final class IdentityTokenTests: XCTestCase {
         let dropped = reports.errors.filter { $0.attempts == 0 }.reduce(0) { $0 + $1.events.count }
         XCTAssertEqual(dropped, 101, "the oldest are reported with attempts 0")
     }
+
+    // Review round: holds, removals and restarts
+
+    func testAFailedIdentifyWriteLeavesTheHoldArmed() async throws {
+        let root = root(), clock = FakeClock(), sleeper = Sleeper(), writes = FailingWrites()
+        let wire = Wire([.failure(refused(["a"], reason: "missing"))])
+        let sdk = try await sdk(root, wire, sleeper, clock, provider: Provider([]), write: { try writes.write($0, $1) })
+        try await sdk.identify(userId: "a")
+        _ = await flushFails(sdk)
+        let armed = await sdk.held
+        XCTAssertTrue(armed)
+        writes.setFailing(true)
+        do { try await sdk.identify(userId: "a", identityToken: clock.token("a", expiresIn: 3600)); XCTFail("the write fails") } catch {}
+        let held = await sdk.held, task = await sdk.holdTask
+        XCTAssertTrue(held, "a failed identify does not end the hold")
+        XCTAssertNotNil(task, "so the held events keep their automatic retry")
+        writes.setFailing(false)
+        await sdk.shutdown()
+    }
+    func testAFailedWriteDoesNotMakeAUserCurrent() async throws {
+        let root = root(), clock = FakeClock(), sleeper = Sleeper(), writes = FailingWrites()
+        let sdk = try await sdk(root, Wire(), sleeper, clock, write: { try writes.write($0, $1) })
+        writes.setFailing(true)
+        do { try await sdk.track(event: "x", userId: "b"); XCTFail("the write fails") } catch {}
+        let observed = await sdk.observedUser
+        XCTAssertNil(observed, "no event was stored for b")
+        writes.setFailing(false)
+        await sdk.shutdown()
+    }
+    func testEndingAHoldRearmsAParkedRemoval() async throws {
+        let root = root(), clock = FakeClock(), sleeper = Sleeper()
+        let sdk = try await sdk(root, Wire(), sleeper, clock)
+        await sdk.parkRemovalHold([["type": "track", "event": "Installation Removed", "messageId": "m1", "timestamp": "2026-11-01T00:00:00.000Z",
+                                   "userId": "a", "properties": ["token": "t", "appId": "x"]]])
+        await sdk.endHold()
+        let parked = await sdk.removalIsParked
+        XCTAssertFalse(parked, "the removal is no longer rejected with no timer left")
+        await sdk.shutdown()
+    }
+    private func removal(_ user: String, _ id: String) -> JSONValue {
+        ["type": "track", "event": "Installation Removed", "messageId": .string(id), "timestamp": "2026-11-01T00:00:00.000Z",
+         "userId": .string(user), "properties": ["token": .string("t-" + user), "appId": "com.example.app", "platform": "ios"]]
+    }
+    private func rewriteState(_ root: URL, _ change: (inout [String: Any]) -> Void) throws {
+        let folder = root.appendingPathComponent("sha256-" + "default".sha256Hex)
+        let file = folder.appendingPathComponent("state.json")
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        change(&object)
+        try JSONSerialization.data(withJSONObject: object).write(to: file)
+    }
+    func testATransientFailureDoesNotDropAnotherUsersRemovalWhileAnotherIsHeld() async throws {
+        let root = root(), clock = FakeClock(), sleeper = Sleeper(), reports = Reports()
+        let first = try await sdk(root, Wire(), sleeper, clock)
+        await first.shutdown()
+        try rewriteState(root) { object in
+            object["optedOut"] = true; object["userId"] = "a"; object["identityTokenSupplied"] = true
+            object["pendingRemovals"] = [self.removal("a", "m-a"), self.removal("b", "m-b")].compactMap { try? JSONSerialization.jsonObject(with: JSONEncoder().encode($0)) }
+        }
+        try Data(#"{"version":1,"optedOut":true}"#.utf8).write(to: root.appendingPathComponent("sha256-" + "default".sha256Hex).appendingPathComponent("consent.json"))
+        let serverDown = DeliveryFailure(status: 500, message: "down")
+        let wire = Wire([.failure(refused(["a"], reason: "expired")), .failure(serverDown), .failure(serverDown), .failure(serverDown)])
+        let sdk = try await sdk(root, wire, sleeper, clock, provider: Provider([.nothing]), reports: reports, retries: 0)
+        for _ in 0..<5000 where !(await sdk.held) { try await Task.sleep(for: .milliseconds(1)) }
+        let held = await sdk.held
+        XCTAssertTrue(held)
+        XCTAssertEqual(try loadState(directory: root, namespace: "default").pendingRemovals.compactMap { $0["messageId"]?.string }.sorted(), ["m-a", "m-b"],
+                       "b's removal met a transient failure and is kept, not dropped")
+        await sdk.shutdown()
+    }
+    func testARefusedEventIsHeldAfterARestartEvenWhenNobodyIdentified() async throws {
+        let root = root(), clock = FakeClock(), sleeper = Sleeper(), reports = Reports()
+        let first = try await sdk(root, Wire(), sleeper, clock, provider: Provider([]))
+        try await first.track(event: "x", userId: "a")
+        await first.shutdown()
+        let wire = Wire([.failure(refused(["a"], reason: "missing"))])
+        let sdk = try await sdk(root, wire, sleeper, clock, provider: Provider([]), reports: reports)
+        let failure = await flushFails(sdk)
+        XCTAssertEqual(failure?.status, 403)
+        XCTAssertEqual(try loadState(directory: root, namespace: "default").queued.count, 1, "held, not dropped as a previous user's")
+        XCTAssertTrue(reports.errors.isEmpty)
+        await sdk.shutdown()
+    }
+    func testTheHeldLimitAlsoTrimsWhenTheHoldStarts() async throws {
+        let root = root(), clock = FakeClock(), sleeper = Sleeper(), reports = Reports()
+        let wire = Wire([.failure(refused(["a"], reason: "missing"))])
+        let sdk = try await sdk(root, wire, sleeper, clock, provider: Provider([]), reports: reports, batchSize: 5000)
+        for index in 0..<1500 { try await sdk.track(event: "e\(index)", userId: "a") }
+        _ = await flushFails(sdk)
+        XCTAssertEqual(try loadState(directory: root, namespace: "default").queued.count, 1000, "trimmed when the hold started")
+        await sdk.shutdown()
+        XCTAssertEqual(reports.errors.filter { $0.attempts == 0 }.reduce(0) { $0 + $1.events.count }, 500)
+    }
+    func testTheTokenFlagSurvivesASalvagedStateAndADamagedFlag() async throws {
+        let root = root(), clock = FakeClock(), sleeper = Sleeper()
+        let first = try await sdk(root, Wire(), sleeper, clock)
+        try await first.identify(userId: "a", identityToken: clock.token("a", expiresIn: 3600))
+        await first.shutdown()
+        // Only the flag is damaged: the cache is still there, so identity is still in use.
+        try rewriteState(root) { $0["identityTokenSupplied"] = "yes" }
+        XCTAssertTrue(try loadState(directory: root, namespace: "default").identityTokenSupplied)
+        // The whole file is damaged: the identity is salvaged, and so is the flag.
+        try rewriteState(root) { $0["identityTokenSupplied"] = true; $0.removeValue(forKey: "version") }
+        XCTAssertTrue(try loadState(directory: root, namespace: "default").identityTokenSupplied)
+    }
     private func waitForRequests(_ wire: Wire, _ count: Int) async throws {
         for _ in 0..<5000 {
             if await wire.sent.count >= count { return }
@@ -752,6 +856,26 @@ final class IdentityTokenTests: XCTestCase {
         tuned.identityProviderTimeoutMs = -1; tuned.identityProviderBackoffMs = .nan
         XCTAssertEqual([tuned.identityProviderTimeoutMs, tuned.identityProviderBackoffMs], [400, 1500], "an unusable value keeps the last one")
     }
+}
+
+private final class FailingWrites: @unchecked Sendable {
+    private let lock = NSLock()
+    private var failing = false
+    func setFailing(_ value: Bool) { lock.withLock { failing = value } }
+    func write(_ data: Data, _ url: URL) throws {
+        if lock.withLock({ failing }) { throw CocoaError(.fileWriteOutOfSpace) }
+        try JSONStore.write(data, to: url)
+    }
+}
+
+extension TranthorSDK {
+    /// Test hooks: put the SDK in the state a removal hold leaves behind.
+    func parkRemovalHold(_ removals: [[String: JSONValue]]) {
+        state.pendingRemovals = removals
+        removalParked = DeliveryFailure(status: 403, message: "x", code: "identity_not_verified")
+        startHold(60_000)
+    }
+    var removalIsParked: Bool { removalParked != nil }
 }
 
 private final class ProtectedWrites: @unchecked Sendable {

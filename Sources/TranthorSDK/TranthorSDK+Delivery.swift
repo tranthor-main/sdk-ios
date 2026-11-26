@@ -467,11 +467,18 @@ extension TranthorSDK {
         guard !others.isEmpty else { return holdResult }
         let sent = await deliver(others, source: source)
         switch sent.result {
+        case .failed(let failure) where source == .removals && failure.retryable:
+            // A removal keeps a retryable failure instead of ending on it: the others wait with the held items, and the hold
+            // that started this stands.
+            return Delivered(result: holdResult.result, remaining: batch)
         case .acknowledged, .failed:
             // Delivered, or reported as failed for good: either way they leave the queue.
             removeFromSource(sent.remaining, source)
             return holdResult
         case .interrupted, .held, .exhausted:
+            return keepWaiting(sent)
+        }
+        func keepWaiting(_ sent: Delivered) -> Delivered {
             let waiting = Set(sent.remaining.compactMap { $0["messageId"]?.string })
             let remaining = batch.filter { item in item["messageId"]?.string.map { waiting.contains($0) } == true || isHeld(item) }
             return Delivered(result: sent.result, remaining: remaining)
@@ -494,9 +501,10 @@ extension TranthorSDK {
             persistDeliveryState()
         }
     }
-    /// Ends the hold: the next attempt is made by an explicit flush or the hold's own wake-up.
+    /// Starts a hold: automatic delivery waits, and the next attempt is made by an explicit flush or the hold's own wake-up.
     func startHold(_ ms: Double) {
         held = true
+        trimToHeldLimit()
         holdGeneration &+= 1
         let generation = holdGeneration
         holdTask?.cancel()
@@ -505,6 +513,18 @@ extension TranthorSDK {
             do { try await sleep(ms) } catch { return }
             await self?.holdEnded(generation)
         }
+    }
+    /// While a batch is held the queue keeps at most `heldQueueLimit` events; a queue that is already longer when the
+    /// hold starts is cut down now, the oldest first, and what goes is reported.
+    func trimToHeldLimit() {
+        let capacity = min(configuration.maxQueueSize, Self.heldQueueLimit)
+        var removed: [QueuedEvent] = []
+        while queue.events.count > capacity && queue.events.count > inFlightCount {
+            removed.append(queue.events.remove(at: inFlightCount + Self.overflowIndex(queue.events[inFlightCount...].map(\.event))))
+        }
+        guard !removed.isEmpty else { return }
+        deleteFiles(removed.map(\.sequence))
+        reportDropped(removed.map(\.event))
     }
     func holdEnded(_ generation: Int) {
         guard generation == holdGeneration, held else { return }
@@ -515,6 +535,8 @@ extension TranthorSDK {
         armTimer()
     }
     func endHold() {
+        // A removal the hold parked has no timer left once the hold is over: it gets its cycle back.
+        if held, !state.pendingRemovals.isEmpty { removalParked = nil }
         held = false
         holdGeneration &+= 1
         holdTask?.cancel(); holdTask = nil

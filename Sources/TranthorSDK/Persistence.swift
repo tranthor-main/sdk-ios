@@ -46,7 +46,8 @@ struct StoredState: Codable, Sendable {
         pendingRemovals = (try? values.decodeIfPresent([[String: JSONValue]].self, forKey: .pendingRemovals)) ?? []
         // A state written before identity tokens, or a damaged cache, starts with an empty one. The provider refills it.
         identityTokens = (try? values.decodeIfPresent(IdentityTokenCache.self, forKey: .identityTokens)) ?? IdentityTokenCache()
-        identityTokenSupplied = (try? values.decodeIfPresent(Bool.self, forKey: .identityTokenSupplied)) ?? false
+        // Damage to the flag alone must not turn identity off while tokens are cached.
+        identityTokenSupplied = (try? values.decodeIfPresent(Bool.self, forKey: .identityTokenSupplied)) ?? !identityTokens.isEmpty
     }
 }
 
@@ -298,6 +299,8 @@ struct JSONStore: Sendable {
         if let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
             if let anonymous = object["anonymousId"] as? String, UUID(uuidString: anonymous) != nil { result.anonymousId = anonymous }
             result.userId = object["userId"] as? String
+            // The flag decides whether a refusal holds a batch, so it is kept with the identity.
+            if let supplied = object["identityTokenSupplied"] as? Bool { result.identityTokenSupplied = supplied }
         }
         return result
     }
