@@ -20,7 +20,7 @@ All notable changes to this project are documented here. The format follows
 - An app that never configures a token provider and never passes an identity token handles a refused token exactly as before. The one exception is the outage hold below, which applies to every app.
 - With tokens in use, a batch the server refuses for lack of a valid token for the current user is held instead of dropped, and at most 1,000 events are kept while it is held.
 - A batch the server turns away because it cannot read its identity settings is now kept and sent again after the delay the server asks for, for every app, whether or not it uses identity tokens: it is a server outage, never a reason to drop events.
-- When identity tokens are not in use and the server refuses a user, only that user's events are reported and dropped; other users' and anonymous events in the batch are sent as usual.
+- When identity tokens are not in use and the server refuses a user, only that user's ordinary events are reported and dropped; other users' and anonymous events in the batch are sent as usual, and a queued push removal is kept and retried instead.
 - A state file that has to be set aside keeps the pending removals and the installation record, and every event already queued counts as a signed-out user's.
 - While a hold is active, the queue is trimmed in one place and an `Installation Removed` is never trimmed.
 - A push `Installation Removed` is never dropped for lack of a token: each failed attempt is reported through `onNotice`, not `onError`, and it is tried again until it is delivered.

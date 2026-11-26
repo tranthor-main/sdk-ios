@@ -213,7 +213,7 @@ extension TranthorSDK {
                         // Nothing to renew, drop or hold: a failed send with the normal backoff, never a tight loop.
                         notify(.identityRefused, reason: failure.reason, message: "The server refused the identity token and named no user to renew; the send is retried with the normal backoff")
                         retryable = true
-                    } else if let current, refused.contains(current), !identityInUse {
+                    } else if !identityInUse {
                         // An app that never supplied a token provider or a token keeps the ordinary refusal: the refused users'
                         // events are reported and dropped, and the rest of the batch is sent as usual. A removal is never
                         // dropped for lack of a token: every one in the batch is split off and parked.

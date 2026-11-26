@@ -949,7 +949,8 @@ final class IdentityTokenTests: XCTestCase {
     }
     func testASalvagedStateKeepsThePendingRemovalsAndTheInstallation() async throws {
         let root = root(), clock = FakeClock(), sleeper = Sleeper()
-        let first = try await sdk(root, Wire(), sleeper, clock)
+        // The removal's request fails, so the opt-out leaves it pending (its retry waits on the sleeper).
+        let first = try await sdk(root, Wire([.success(ResponseNotes()), .failure(DeliveryFailure(status: 500, message: "down"))]), sleeper, clock)
         try await first.identify(userId: "a")
         try await first.registerInstallation(token: "apns-token", appId: "com.example.app", environment: .development, permission: .granted)
         try await first.flush()
@@ -976,6 +977,21 @@ final class IdentityTokenTests: XCTestCase {
         XCTAssertEqual(sent.count, 2)
         XCTAssertEqual(sent.last?.batch.compactMap { $0["event"]?.string }, ["other", "anon"], "the rest goes out as usual")
         XCTAssertTrue(try loadState(directory: root, namespace: "default").queued.isEmpty)
+        await sdk.shutdown()
+    }
+
+    func testWithoutIdentityARefusedPreviousUsersEventsAreDroppedAndTheFlushSaysSo() async throws {
+        let root = root(), clock = FakeClock(), sleeper = Sleeper(), reports = Reports()
+        let wire = Wire([.failure(refused(["a"], reason: "missing"))])
+        let sdk = try await sdk(root, wire, sleeper, clock, reports: reports)   // no provider, no token ever supplied
+        try await sdk.track(event: "mine", userId: "a")
+        try await sdk.reset()                                   // a is now a previous user, and nobody is current
+        try await sdk.track(event: "anon", anonymousId: "anon-1")
+        let failure = await flushFails(sdk)
+        XCTAssertEqual(failure?.status, 403, "events were given up, so an explicit flush says so")
+        XCTAssertEqual(reports.errors.first?.events.compactMap { $0["event"]?.string }, ["mine"])
+        let sent = await wire.sent
+        XCTAssertEqual(sent.last?.batch.compactMap { $0["event"]?.string }, ["anon"])
         await sdk.shutdown()
     }
     func testAHeldQueueNeverTrimsARemovalAndOnlyOrdinaryEventsGoFirst() async throws {
