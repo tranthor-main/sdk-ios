@@ -82,6 +82,18 @@ func subset(_ expected: J, _ actual: J?, path: String) throws {
     } else { try require(expected == actual, "Mismatch \(path): expected \(expected), got \(actual)") }
 }
 
+/// Tokens are named by ref; an absent field and an empty list both mean none. Only refs are printed.
+func checkIdentityTokens(expected refs: [String]?, sent: [String], minted: [String: String], index: Int) throws {
+    // An absent expectation means none: a request that carries a token nobody expected fails.
+    let refs = refs ?? []
+    let wanted = try refs.map { ref -> String in
+        guard let token = minted[ref] else { throw CheckFailure("Request \(index): token \(ref) was never minted") }
+        return token
+    }
+    let names = sent.map { token in minted.first { $0.value == token }?.key ?? "<unknown token>" }
+    try require(sent == wanted, "Request \(index) identityTokens \(names), expected \(refs)")
+}
+
 @MainActor
 final class ScenarioRunner {
     let host: String
@@ -288,16 +300,8 @@ final class ScenarioRunner {
                 } else { try subset(value, record["headers"]?[key], path: "header " + key) }
             }
             if let context = expected["context"] { try subset(context, record["body"]?["context"], path: "batch context") }
-            if let refs = expected["identityTokens"]?.array?.compactMap(\.string) {
-                // Tokens are named by ref; an absent field and an empty list both mean none. Only refs are printed.
-                let wanted = try refs.map { ref -> String in
-                    guard let token = minted[ref] else { throw CheckFailure("Request \(index): token \(ref) was never minted") }
-                    return token
-                }
-                let sent = record["body"]?["identityTokens"]?.array?.compactMap(\.string) ?? []
-                let names = sent.map { token in minted.first { $0.value == token }?.key ?? "<unknown token>" }
-                try require(sent == wanted, "Request \(index) identityTokens \(names), expected \(refs)")
-            }
+            try checkIdentityTokens(expected: expected["identityTokens"]?.array?.compactMap(\.string),
+                                    sent: record["body"]?["identityTokens"]?.array?.compactMap(\.string) ?? [], minted: minted, index: index)
             let batch = record["body"]?["batch"]?.array ?? []
             let items = expected["batch"]?.array ?? []
             try require(batch.count == items.count, "Batch count request \(index)")

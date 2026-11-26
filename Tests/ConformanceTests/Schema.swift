@@ -11,20 +11,27 @@ func require(_ condition: Bool, _ message: String) throws {
 }
 
 /// Implements the draft-7 keywords used by the vendored schema, failing closed on unknown keywords.
+/// The schema itself is wrong (an unsupported keyword, an unresolved reference): never a mismatch of the value, so it is
+/// not swallowed where a keyword only asks whether a sub-schema matches.
+struct SchemaFault: Error, CustomStringConvertible {
+    var description: String
+    init(_ text: String) { description = text }
+}
+
 struct Schema {
     let root: J
     func validate(_ value: J, schema: J? = nil, path: String = "$" ) throws {
         let rule = schema ?? root
-        guard let map = rule.object else { throw CheckFailure("Invalid schema at \(path)") }
+        guard let map = rule.object else { throw SchemaFault("Invalid schema at \(path)") }
         let supported: Set<String> = ["$schema", "$id", "title", "definitions", "$ref", "type", "properties", "required",
             "additionalProperties", "enum", "const", "pattern", "minLength", "minimum", "maximum", "items", "minItems",
             "uniqueItems", "contains", "oneOf", "anyOf", "allOf", "not", "if", "then", "else"]
-        try require(Set(map.keys).isSubset(of: supported), "Unsupported schema keyword \(path)")
+        if !Set(map.keys).isSubset(of: supported) { throw SchemaFault("Unsupported schema keyword \(path)") }
         if let ref = map["$ref"]?.string {
-            try require(ref.hasPrefix("#/"), "Nonlocal schema ref")
+            if !ref.hasPrefix("#/") { throw SchemaFault("Nonlocal schema ref") }
             var target: J? = root
             for component in ref.dropFirst(2).split(separator: "/") { target = target?[String(component)] }
-            guard let target else { throw CheckFailure("Unresolved schema ref \(ref)") }
+            guard let target else { throw SchemaFault("Unresolved schema ref \(ref)") }
             try validate(value, schema: target, path: path)
             return
         }
@@ -65,26 +72,31 @@ struct Schema {
             }
             if let items = map["items"] { for (index, child) in array.enumerated() { try validate(child, schema: items, path: "\(path)[\(index)]") } }
             if let contains = map["contains"] {
-                try require(array.contains { (try? validate($0, schema: contains)) != nil }, "Contains mismatch \(path)")
+                try require(try array.contains { try matches($0, schema: contains) }, "Contains mismatch \(path)")
             }
         }
         for keyword in ["allOf", "anyOf", "oneOf"] {
             if let variants = map[keyword]?.array {
-                let count = variants.filter { (try? validate(value, schema: $0, path: path)) != nil }.count
+                let count = try variants.filter { try matches(value, schema: $0, path: path) }.count
                 try require(keyword == "allOf" ? count == variants.count : keyword == "oneOf" ? count == 1 : count >= 1,
                             "\(keyword) mismatch \(path)")
             }
         }
         if let negated = map["not"] {
-            try require((try? validate(value, schema: negated, path: path)) == nil, "not mismatch \(path)")
+            try require(!(try matches(value, schema: negated, path: path)), "not mismatch \(path)")
         }
         if let condition = map["if"] {
-            if (try? validate(value, schema: condition)) != nil {
+            if try matches(value, schema: condition) {
                 if let then = map["then"] { try validate(value, schema: then, path: path) }
             } else if let otherwise = map["else"] {
                 try validate(value, schema: otherwise, path: path)
             }
         }
+    }
+    /// Whether the value matches a sub-schema. A mismatch is false; a fault in the schema is thrown.
+    private func matches(_ value: J, schema: J, path: String = "$") throws -> Bool {
+        do { try validate(value, schema: schema, path: path); return true }
+        catch is CheckFailure { return false }
     }
     private func matches(_ value: J, type: String) -> Bool {
         switch type {

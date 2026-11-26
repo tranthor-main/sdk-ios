@@ -27,6 +27,21 @@ final class RunnerValidationTests: XCTestCase {
         XCTAssertThrowsError(try validateEnvelope(["batch": [:]]))
         XCTAssertThrowsError(try validateEnvelope(nil))
     }
+    func testASchemaFaultInsideNotOrIfIsNotSwallowed() {
+        let schema = Schema(root: [:])
+        XCTAssertThrowsError(try schema.validate("a@b", schema: ["not": ["format": "email"]]))
+        XCTAssertThrowsError(try schema.validate("a", schema: ["if": ["unknownKeyword": 1], "then": ["type": "string"]]))
+        XCTAssertThrowsError(try schema.validate("a", schema: ["anyOf": [["format": "email"], ["type": "string"]]]))
+        // An ordinary mismatch inside them is still a mismatch, not a fault.
+        XCTAssertNoThrow(try schema.validate("a", schema: ["not": ["type": "number"]]))
+        XCTAssertThrowsError(try schema.validate("a", schema: ["not": ["type": "string"]]))
+    }
+    func testAnAbsentIdentityTokensExpectationMeansNone() throws {
+        try checkIdentityTokens(expected: nil, sent: [], minted: [:], index: 0)
+        XCTAssertThrowsError(try checkIdentityTokens(expected: nil, sent: ["a.b.c"], minted: ["t1": "a.b.c"], index: 0))
+        try checkIdentityTokens(expected: ["t1"], sent: ["a.b.c"], minted: ["t1": "a.b.c"], index: 0)
+        XCTAssertThrowsError(try checkIdentityTokens(expected: [], sent: ["a.b.c"], minted: [:], index: 0))
+    }
     func testFailureDiagnosticsIncludeEveryRequestIndexTimeAndMessageId() throws {
         let records: [J] = [
             ["index": 0, "receivedAtMs": 1200, "headers": ["authorization": "never-log-header"],
