@@ -199,3 +199,35 @@ test("a token whose alg is not HS256 is refused with the reason signature", asyn
     assert.equal((await response.json()).reason, "signature", alg);
   }
 });
+
+test("an event over 64 KB is dropped and counted in x-tranthor-dropped-events in every mode", async (t) => {
+  const { post, control } = await setup(t);
+  const big = { type: "track", messageId: "m-big", anonymousId: "anon-1", event: "Big", properties: { blob: "x".repeat(65 * 1024) } };
+  const small = { type: "track", messageId: "m-small", anonymousId: "anon-1", event: "Small" };
+  for (const mode of ["off", "monitor", "required"]) {
+    await control("identity", { mode });
+    const response = await post(BATCH_PATH, { batch: [big, small] });
+    assert.equal(response.status, 204, mode);
+    assert.equal(response.headers.get("x-tranthor-dropped-events"), "1", mode);
+  }
+});
+
+test("required mode keeps script order by arrival: a malformed body consumes an entry, an identity verdict does not", async (t) => {
+  const { host, post, control, required } = await setup(t);
+  await required();
+  await control("script", { responses: [{ status: 500 }, { status: 429 }] });
+  const malformed = await fetch(`${host}${BATCH_PATH}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{not json" });
+  assert.equal(malformed.status, 400);
+  assert.equal((await post(BATCH_PATH, { batch: [item("user-1")] })).status, 403);
+  assert.equal((await post(BATCH_PATH, { batch: [] })).status, 429);
+});
+
+test("required mode gives concurrent requests their script entries in arrival order", async (t) => {
+  const { post, control, required } = await setup(t);
+  await required();
+  await control("script", { responses: [{ status: 500, delayMs: 60 }, { status: 429 }] });
+  const first = post(BATCH_PATH, { batch: [] });
+  await new Promise((resolve) => setTimeout(resolve, 15));
+  const second = post(BATCH_PATH, { batch: [] });
+  assert.deepEqual((await Promise.all([first, second])).map((r) => r.status), [500, 429]);
+});

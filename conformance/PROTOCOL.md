@@ -60,7 +60,7 @@ or failed callback). This is what `rejected` means. Empty flush succeeds without
 a request. Scenarios may flush during an in-flight cycle, including retry backoff.
 
 Retry network failures without a usable HTTP status, 408, 425, 429, and 500–599.
-Other statuses are terminal, including 400, 401, and 403 (two identity-token answers are held instead; see [Identity tokens](#identity-tokens-identity-token)). The reference transport
+Other statuses are terminal, including 400, 401, and 403. Two identity-token answers are held instead: `403 identity_not_verified`, only when identity is in use, and the identity 503s; the write-key 403s stay terminal (see [Identity tokens](#identity-tokens-identity-token)). The reference transport
 treats any 2xx as success. A 3xx MUST be a non-retryable HTTP failure and
 MUST NOT be followed. For URLSession, use a default or ephemeral session with the
 redirect delegate `urlSession(_:task:willPerformHTTPRedirection:newRequest:completionHandler:)`
@@ -438,9 +438,10 @@ that survives reinstall.
    delays a send; a provider that hangs delays a send by at most the 20 s timeout, once, and is then not called
    again for 60 s. **Provider failure** (an error, a timeout or no token) starts that 60 s backoff.
 4. **At most 10 users per request, when identity is in use.** The server considers at most 10 tokens per request.
-   When a provider is configured or any token is cached, a batch takes the longest prefix of the queue that holds
+   When identity is in use (a provider is configured, or an identity token has ever been passed to `identify` in this install; in memory only for the web), a batch takes the longest prefix of the queue that holds
    at most 10 distinct `userId` values (and at most the batch size); the next batch takes the following events, in
-   queue order. An SDK that never uses identity tokens keeps its batching exactly as before.
+   queue order. An SDK that never uses identity tokens keeps its batching exactly as before. An SDK that persists state
+   remembers "identity in use" across restarts with that state; on the web it is remembered only in memory.
 
 ### What the server does with anonymous events, and what the SDK must surface
 
@@ -459,6 +460,13 @@ The SDK MUST read both headers on a 2xx response (the transport hands the counts
 not zero, report one **notice** per response through its error or diagnostic callback, with no token and no user
 id in the message. A notice has no events and has a `kind`: `events-dropped` or `events-unverified`, with the
 `count`. The docs of every SDK MUST say: in Required, register push (and send the identify that carries traits) after sign-in.
+
+### Token limits
+
+The server refuses a token longer than 2,048 bytes and one whose lifetime (`exp` minus `iat`) is more than 7 days
+(reasons `malformed` and `lifetime`). A token the backend signs must stay inside both limits; the mock enforces
+the same two limits. The server also drops any single event whose serialized size is larger than 64 KB (the limit is per event, not for the batch), in every mode, and counts it in
+`x-tranthor-dropped-events`; the mock does the same.
 
 ### Token audience
 
@@ -503,13 +511,17 @@ server outage and never a reason to drop.
    drop or hold) MUST NOT be sent again in a tight loop. Treat it as a failed send: report an `identity-refused`
    notice and apply the queue's normal retry backoff and budget.
 
-**An `Installation Removed` is never dropped for lack of a valid token** (opt-out or sign-out removal). In Required the
-server refuses an unverified removal with a 403, and dropping it would leave the phone registered and receiving push
-after the person opted out. If it is refused and one renewal does not fix it, keep it parked, retry it on the same
-hold timer as other holds (60 s) and on the next launch, and report each failed attempt through the error callback
-(the push token redacted). It stays until it is delivered or until the app signs the same user in again (the
-registration then supersedes it). This applies to the previous-user rule too: a removal is not removed from a batch as
-"a previous user's item". The JavaScript core sends no removals and has no special code for them; the scenario
+**An `Installation Removed` for a signed-in or just signed-out user is never dropped for lack of a valid token.** In
+Required the server refuses an unverified removal with a 403, and dropping it would leave the phone registered and
+receiving push after the person opted out. If it is refused and one renewal does not fix it, keep it parked, retry it
+on the same hold timer as other holds (60 s) and on the next launch, and report each failed attempt as a **notice**
+(the push token redacted), never through the error callback: nothing was dropped, and the error callback is for data
+the SDK gave up on. It stays until it is delivered or until the app signs the same user in again (the registration
+then supersedes it). The previous-user rule does not apply to it: a removal is not removed from a batch as "a
+previous user's item". The SDKs never create an anonymous removal. If an anonymous sensitive event is nevertheless
+sent, the server drops it silently with a 204 in Required; the SDK learns that only from the
+`x-tranthor-dropped-events` count and cannot retry what it cannot identify, so there is no guarantee for it. The
+JavaScript core sends no removals and has no special code for them; the scenario
 `identity-token-removal-refused-twice-stays-queued` shows the hold behaviour a removal relies on.
 
 **Hold.** The batch stays at the head of the queue with its original events, order and stamps. Automatic delivery
@@ -553,7 +565,7 @@ count or length. An `identityTokens` that is not an array of strings is a 400 wi
 mode a request with any item whose `userId` has no valid token for that user fails with `403`
 `{ message, code: "identity_not_verified", reason, userIds }` (`reason` is the first failure: `missing`, `signature`,
 `expired`, ...; `userIds` the distinct users without a valid token, at most 50). That verdict is the server's own answer:
-it does not consume a scripted response. Otherwise the next scripted response applies. In `monitor` mode nothing is rejected and
+it does not consume a scripted response. Otherwise the next scripted response applies. The protocol allows one ingestion request in flight; with two in flight, which scripted entry each gets when one of them receives a verdict is undefined, and scenarios must not rely on it. In `monitor` mode nothing is rejected and
 `x-tranthor-unverified-events` counts the items that would fail. In `required` mode the mock also drops the anonymous sensitive
 events listed above with a 204 and the count in `x-tranthor-dropped-events`; an unknown or non-HS256 `alg` fails as `signature`. Scripted response entries may carry `body`, a JSON object
 sent with `Content-Type: application/json`, to script the `write_key_*` 403s and the identity 503s. The mock does not model
@@ -646,9 +658,16 @@ separate ports via CONFORMANCE_PORT or separate hosts.
 
 ## Suite changelog
 
+- **1.6.0**
+  - Scenario expectations tightened and one scenario's event corrected, from review of the native SDKs: `identity-token-403-renews-and-retries` observes 500 ms (retry exactly once); `identity-token-503-unavailable-is-held-not-dropped` lower bound 985 ms; `identity-token-provider-timeout` upper bound 800 ms; `identity-token-removal-refused-twice-stays-queued` uses `properties.token` and checks the hold delays; `identity-token-token-supplied-once-is-held-after-refusal` also checks a later event and no provider call; `identity-token-write-key-403s-are-terminal` runs with identity in use.
+  - Text: the 10-user cut follows "identity in use" (a provider, or a token ever passed to `identify`), not the cache; the removal guarantee covers identified removals only and says what the SDK can and cannot know about a silently dropped anonymous one; failed removals are notices, never errors; the token limits and the 64 KB event drop are documented.
+  - Mock: counts events over 64 KB in `x-tranthor-dropped-events` in every mode; script entries keep arrival order in Required (a malformed body consumes one, an identity verdict gives its entry back).
+  - Internal ticket, design record and private repository references removed from the suite files.
+- **1.5.1**
+  - Wording only: under the `Installation Removed` rule a refused, parked removal is reported as a notice on each failed attempt (push token redacted), not through the error callback. The scenario `identity-token-removal-refused-twice-stays-queued` already asserts empty errors and notices. No schema or scenario change.
 - **1.5.0**
   - Behaviour change, replaces what each SDK did: a `403 identity_not_verified` holds the current user's batch only when identity is in use (provider configured, or a token ever supplied through `identify`); otherwise it is reported and dropped as before. A `503 identity_settings_unavailable` / `identity_secrets_unavailable` is held for every app, in use or not, because it is a server outage.
-  - An `Installation Removed` is never dropped for lack of a valid token: parked, retried on the hold timer and at next launch, each failure reported with the push token redacted. This overrides "reported and dropped" for the Android removal.
+  - An `Installation Removed` is never dropped for lack of a valid token: parked, retried on the hold timer and at next launch, each failed attempt reported as a notice (not through the error callback, because nothing was dropped) with the push token redacted. This replaces any earlier rule that a refused removal is reported and dropped.
   - Adds scenarios `identity-token-never-in-use-403-is-dropped`, `identity-token-token-supplied-once-is-held-after-refusal` and `identity-token-removal-refused-twice-stays-queued`; `identity-token-refusal-without-user-backs-off` now configures a provider so identity is in use.
 - **1.4.1**
   - Wording only: the `x-tranthor-dropped-events` notice is neutral because the count includes oversized events in every mode; the token audience rule is documented. `identity-token-anonymous-drop-is-surfaced` has a corrected description. No schema change.

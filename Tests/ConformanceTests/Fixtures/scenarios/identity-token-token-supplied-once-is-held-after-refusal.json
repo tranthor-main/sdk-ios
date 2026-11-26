@@ -1,6 +1,6 @@
 {
   "id": "identity-token-token-supplied-once-is-held-after-refusal",
-  "description": "A token given once through identify puts identity in use for good, even with no provider and after the refusal deleted the cached token: the refused batch is held, never dropped.",
+  "description": "A token given once through identify puts identity in use, even with no provider and after the refusal deleted the cached token: the refused batch is held and a later event of the same user is held too, never dropped. (Remembering this across a restart is covered by PROTOCOL for SDKs that persist state.)",
   "capabilities": [
     "core",
     "transport",
@@ -51,6 +51,60 @@
           {
             "kind": "identity-refused",
             "reason": "signature"
+          }
+        ]
+      }
+    },
+    {
+      "op": "emit",
+      "call": "b",
+      "method": "track",
+      "data": {
+        "userId": "user-1",
+        "event": "event-b"
+      }
+    },
+    {
+      "op": "flush",
+      "rejected": true
+    },
+    {
+      "op": "assert",
+      "observeMs": 300,
+      "expect": {
+        "requests": [
+          {
+            "batch": [
+              {
+                "call": "a"
+              }
+            ],
+            "identityTokens": [
+              "t1"
+            ]
+          },
+          {
+            "batch": [
+              {
+                "call": "a"
+              },
+              {
+                "call": "b"
+              }
+            ],
+            "identityTokens": []
+          }
+        ],
+        "errors": [],
+        "providerCalls": [],
+        "notices": [
+          {
+            "kind": "identity-refused",
+            "reason": "signature"
+          },
+          {
+            "kind": "identity-refused",
+            "reason": "missing"
           }
         ]
       }

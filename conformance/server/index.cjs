@@ -102,9 +102,9 @@ function createMockServer() {
         return json(response, 200, { requests });
       }
       if (request.method === "POST" && path === BATCH_PATH) {
-        // Reserve script order at arrival, even if another body finishes reading first. In required mode the
-        // server's own verdict may answer instead of the script, so the entry is taken after the body is read.
-        let entry = identityMode === "required" ? undefined : script[cursor++] ?? { status: 204 };
+        // Reserve script order at arrival, even if another body finishes reading first. A malformed or oversize
+        // body still consumes its entry; only the server's own identity verdict gives its entry back (below).
+        const entry = script[cursor++] ?? { status: 204 };
         const record = {
           index: requests.length,
           receivedAtMs,
@@ -122,9 +122,14 @@ function createMockServer() {
         if (requestGeneration !== generation) return response.destroy();
         const { verdict, extraHeaders, summary } = judge({ mode: identityMode, headers: request.headers, body: record.body });
         if (identityMode !== "off") record.identity = summary;
-        // The verdict is the server's own answer, not a scripted one: it leaves the script untouched.
-        if (verdict) return json(response, verdict.status, verdict.body);
-        entry ??= script[cursor++] ?? { status: 204 };
+        // The verdict is the server's own answer, not a scripted one: it gives its reserved entry back. This is
+        // exact only with one request in flight, as the protocol requires. With two requests in flight the entry
+        // each one gets is undefined, and scenarios must not rely on it.
+        if (verdict) {
+          const index = script.indexOf(entry);
+          if (index === cursor - 1 || (index === -1 && cursor > script.length)) cursor--;
+          return json(response, verdict.status, verdict.body);
+        }
         const respond = () => {
           try {
             if (entry.drop) return request.socket.destroy();

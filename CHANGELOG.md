@@ -12,7 +12,7 @@ All notable changes to this project are documented here. The format follows
 - `Configuration.appId` (default: the bundle identifier), sent with every request. An SDK created in an app extension sends the extension's bundle identifier unless `appId` is set.
 - `Configuration.onNotice` and `Notice`: events the server dropped or could not verify, a refused token, unreadable identity settings.
 - `DeliveryFailure.code`, `userIds` and `reason`, read from the server's error body.
-- The conformance suite is now 1.5.0 (the `identity-token` and `app-id` scenarios).
+- The conformance suite is now 1.6.0 (the `identity-token` and `app-id` scenarios).
 
 ### Changed
 

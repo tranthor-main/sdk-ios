@@ -1,6 +1,6 @@
 {
   "id": "identity-token-write-key-403s-are-terminal",
-  "description": "A 403 write_key_app_not_allowed or write_key_origin_not_allowed is a configuration error: the batch is dropped and reported.",
+  "description": "A 403 write_key_app_not_allowed or write_key_origin_not_allowed is a configuration error and stays terminal even while identity is in use: the batch is dropped and reported.",
   "capabilities": [
     "core",
     "transport",
@@ -8,7 +8,10 @@
   ],
   "config": {
     "writeKey": "Basic MDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAwOmNvbmZvcm1hbmNl",
-    "batchSize": 1
+    "batchSize": 1,
+    "identity": {
+      "provider": []
+    }
   },
   "server": {
     "responses": [

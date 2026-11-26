@@ -1,6 +1,6 @@
 {
   "id": "identity-token-403-renews-and-retries",
-  "description": "On 403 identity_not_verified the SDK drops the refused token, renews it through the provider and retries the same batch once.",
+  "description": "On 403 identity_not_verified the SDK drops the refused token, renews it through the provider and retries the same batch exactly once: no third request follows.",
   "capabilities": [
     "core",
     "transport",
@@ -73,7 +73,8 @@
         "providerCalls": [
           "user-1"
         ]
-      }
+      },
+      "observeMs": 500
     }
   ]
 }

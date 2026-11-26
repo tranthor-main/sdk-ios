@@ -1,0 +1,243 @@
+{
+  "id": "identity-token-ten-users-cut-follows-identity-in-use",
+  "description": "The cut at ten distinct users per request follows identity in use, not the token cache: with no provider, a token passed once through identify and then refused (cache emptied), more than ten queued users are still sent in requests of at most ten users.",
+  "capabilities": [
+    "core",
+    "transport",
+    "identity-token"
+  ],
+  "config": {
+    "writeKey": "Basic MDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAwOmNvbmZvcm1hbmNl",
+    "batchSize": 12
+  },
+  "server": {
+    "responses": [
+      {
+        "status": 403,
+        "body": {
+          "code": "identity_not_verified",
+          "message": "Identity token missing or invalid for 1 user.",
+          "reason": "signature",
+          "userIds": [
+            "user-1"
+          ]
+        }
+      }
+    ]
+  },
+  "steps": [
+    {
+      "op": "emit",
+      "call": "a",
+      "method": "identify",
+      "data": {
+        "userId": "user-1"
+      },
+      "identityToken": {
+        "ref": "t1",
+        "sub": "user-1",
+        "ttlSeconds": 3600
+      }
+    },
+    {
+      "op": "assert",
+      "observeMs": 300,
+      "expect": {
+        "requests": [
+          {
+            "batch": [
+              {
+                "call": "a"
+              }
+            ],
+            "identityTokens": [
+              "t1"
+            ]
+          }
+        ],
+        "errors": [],
+        "providerCalls": [],
+        "notices": [
+          {
+            "kind": "identity-refused",
+            "reason": "signature"
+          }
+        ]
+      }
+    },
+    {
+      "op": "emit",
+      "call": "u2",
+      "method": "track",
+      "data": {
+        "userId": "user-2",
+        "event": "event"
+      }
+    },
+    {
+      "op": "emit",
+      "call": "u3",
+      "method": "track",
+      "data": {
+        "userId": "user-3",
+        "event": "event"
+      }
+    },
+    {
+      "op": "emit",
+      "call": "u4",
+      "method": "track",
+      "data": {
+        "userId": "user-4",
+        "event": "event"
+      }
+    },
+    {
+      "op": "emit",
+      "call": "u5",
+      "method": "track",
+      "data": {
+        "userId": "user-5",
+        "event": "event"
+      }
+    },
+    {
+      "op": "emit",
+      "call": "u6",
+      "method": "track",
+      "data": {
+        "userId": "user-6",
+        "event": "event"
+      }
+    },
+    {
+      "op": "emit",
+      "call": "u7",
+      "method": "track",
+      "data": {
+        "userId": "user-7",
+        "event": "event"
+      }
+    },
+    {
+      "op": "emit",
+      "call": "u8",
+      "method": "track",
+      "data": {
+        "userId": "user-8",
+        "event": "event"
+      }
+    },
+    {
+      "op": "emit",
+      "call": "u9",
+      "method": "track",
+      "data": {
+        "userId": "user-9",
+        "event": "event"
+      }
+    },
+    {
+      "op": "emit",
+      "call": "u10",
+      "method": "track",
+      "data": {
+        "userId": "user-10",
+        "event": "event"
+      }
+    },
+    {
+      "op": "emit",
+      "call": "u11",
+      "method": "track",
+      "data": {
+        "userId": "user-11",
+        "event": "event"
+      }
+    },
+    {
+      "op": "emit",
+      "call": "u12",
+      "method": "track",
+      "data": {
+        "userId": "user-12",
+        "event": "event"
+      }
+    },
+    {
+      "op": "flush",
+      "rejected": false
+    },
+    {
+      "op": "assert",
+      "expect": {
+        "requests": [
+          {
+            "batch": [
+              {
+                "call": "a"
+              }
+            ],
+            "identityTokens": [
+              "t1"
+            ]
+          },
+          {
+            "batch": [
+              {
+                "call": "a"
+              },
+              {
+                "call": "u2"
+              },
+              {
+                "call": "u3"
+              },
+              {
+                "call": "u4"
+              },
+              {
+                "call": "u5"
+              },
+              {
+                "call": "u6"
+              },
+              {
+                "call": "u7"
+              },
+              {
+                "call": "u8"
+              },
+              {
+                "call": "u9"
+              },
+              {
+                "call": "u10"
+              }
+            ],
+            "identityTokens": []
+          },
+          {
+            "batch": [
+              {
+                "call": "u11"
+              },
+              {
+                "call": "u12"
+              }
+            ],
+            "identityTokens": []
+          }
+        ],
+        "errors": [],
+        "providerCalls": [],
+        "notices": [
+          {
+            "kind": "identity-refused",
+            "reason": "signature"
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -13,6 +13,8 @@ const MAX_TOKEN_BYTES = 2048;
 const MAX_LIFETIME_SECONDS = 7 * 24 * 3600;
 const CLOCK_TOLERANCE_SECONDS = 120;
 const MAX_REPORTED_USER_IDS = 50;
+// An event larger than this is dropped by the server in every mode and counted in x-tranthor-dropped-events.
+const MAX_EVENT_BYTES = 64 * 1024;
 const MODES = ["off", "monitor", "required"];
 // Anonymous events that could change a customer. In required mode the server drops them with a 204.
 const SENSITIVE_ANONYMOUS_EVENTS = [
@@ -100,7 +102,9 @@ function judge({ mode, headers, body, nowMs = Date.now() }) {
   const users = [];
   let unverifiedItems = 0;
   let dropped = 0;
+  let oversized = 0;
   for (const item of items) {
+    if (Buffer.byteLength(JSON.stringify(item) ?? "") > MAX_EVENT_BYTES) { oversized++; continue; }
     const userId = item && typeof item === "object" ? item.userId : undefined;
     if (typeof userId !== "string" || userId === "") {
       const anonymousSensitive = item && typeof item === "object" &&
@@ -116,9 +120,11 @@ function judge({ mode, headers, body, nowMs = Date.now() }) {
     }
   }
   result.summary.unverifiedUsers = users;
-  if (mode === "required" && dropped > 0) {
-    result.summary.dropped = dropped;
-    result.extraHeaders["x-tranthor-dropped-events"] = String(dropped);
+  // Oversized events are dropped in every mode; anonymous sensitive ones only in required.
+  const totalDropped = oversized + (mode === "required" ? dropped : 0);
+  if (totalDropped > 0) {
+    result.summary.dropped = totalDropped;
+    result.extraHeaders["x-tranthor-dropped-events"] = String(totalDropped);
   }
   if (mode === "monitor" && unverifiedItems > 0) result.extraHeaders["x-tranthor-unverified-events"] = String(unverifiedItems);
   if (mode === "required" && users.length > 0) {
