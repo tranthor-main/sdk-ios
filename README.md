@@ -13,7 +13,7 @@ Send events from an iOS app to [Tranthor](https://tranthor.com): identify custom
 Add the package with Swift Package Manager:
 
 ```swift
-.package(url: "https://github.com/tranthor-main/sdk-ios.git", from: "0.2.1")
+.package(url: "https://github.com/tranthor-main/sdk-ios.git", from: "0.3.0")
 ```
 
 or add the URL in Xcode under Package Dependencies. Then add the products you use to your target:
