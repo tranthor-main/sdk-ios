@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-27
+
 ### Added
 
 - Verified identity: `Configuration.identityTokenProvider` and `identify(userId:identityToken:)`. Identity tokens are kept with the state file, sent in the request body, renewed before they expire and after the server refuses one. A batch the server will not accept for lack of a token stays on the device and is tried again after 60 seconds, or at once on `flush()`, a new token for the user, or a different user. Events queued behind a held batch wait for it. See "Verified identity" in the README.
